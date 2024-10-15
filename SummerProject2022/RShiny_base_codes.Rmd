@@ -1,0 +1,1615 @@
+---
+title: "Time Series Data Analytics and Visualisation App's Codes Report"
+author: |
+  | **Developer:** Vincent
+  | **Student ID:** 30052386
+  | **Program**: Summer Vacation Research Scholarship Program
+  | **Project Title:** Time Series Data Analytics and Visualization App
+  | **Supervisors:** Dr. Pooia Lalbakhsh, Prof. Ariel Liebman, and Dr. Hao Wang
+  | **University**: Monash University Clayton
+  | **Date:** `r format(Sys.time(), '%d %B, %Y')`
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r chunks-global-option, echo = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  error = FALSE, 
+  collapse = TRUE,
+  echo = FALSE,
+  comment = "#",
+  fig.height = 4,
+  fig.width = 8,
+  fig.align = "center",
+  cache = TRUE
+)
+```
+
+### **Libraries / Packages**
+
+```{r read-library, echo=TRUE}
+# Libraries / Packages
+library(tidyverse) # Preliminary tidying package
+library(naniar) # Missing data package
+library(plotly) # Interactive plot package
+library(ggplot2) # For data Visualization
+library(e1071) # Calculate skewness
+library(lubridate) # For date data type manipulation
+library(caret) # Classification And REgression Training package
+library(randomForest) # For fitting random forest model
+library(earth) # For MARS Method (a.k.a. Multivariate Adaptive Regression Splines)
+library(Boruta) # For Boruta Method
+library(zoo) # For converting class dataframe object into class ts object (ts = time series)
+```
+
+### **Reading Data and Preparation**
+**(RShiny App Lines: 36 - 69)**
+
+This section will cover all raw datasets reading and preparation before using those datasets in the server environment. This demonstration of the application requires two datasets generated from the **Dataset Modification and Preprocessing Report** in the dataset_modification_and_preprocessing.ipynb file as follow:
+
+1. time_series_df.csv (Section 3.4. Distribution, Missing Value, Outlier, and Trend Pages Dataset)
+2. selection_df.csv (Section 3.5. Feature Selection Page and Random Forest Modelling Dataset)
+
+These two datasets can be replaced with other time series datasets as long as the structure of the content follows the rules stated in the **Time Series Data Analytics and Visualization App User Guide and Random Forest Modelling of the Photovoltaic (PV) Generation Report section 2.1. Data Preparation**.
+
+Following are the steps of this section:
+
+- Reading data and modify the ReadTime variable structure into multiple helper variables (i.e., splitting ReadTime into date and time variables then further splitting date and time variables into some variables);
+- Change the format of pv dataset object from wide format into longer format by using pivot_longer() function and stored it into the pv_data dataset object;
+- Convert PVDate variable into Date data type -> for date filter in server environment of the RShiny App;
+- Create raw data table -> for the Home page interactive table (pv_raw dataset object);
+- Create small_df dataset object for the Missing Value page's plot 5 (this dataset object will support us in using varSelectInput() function for gg_miss_fct() function in the server environment to filter by factor);
+- Create selection_df dataset object for the feature selection part.
+
+```{r data-reading-and-manipulation, echo = TRUE}
+# Reading Data and Preparation (RShiny App Lines: 36 - 69)
+
+# Reading data and modify the ReadTime variable structure into multiple helper variables (i.e., splitting ReadTime into date and time variables then further splitting date and time variables into some variables)
+pv <- as_tibble(read.csv(("./data/time_series_df.csv"))) %>% 
+  separate(ReadTime, into = c("PVdate", "PVtime"), sep = "\\s", extra = "merge", remove = FALSE) %>% 
+  separate(PVdate, into = c("dayofmonth", "month", "year"), sep = "/", extra = "merge", remove = FALSE) %>% 
+  separate(PVtime, into = c("timefactor", "AMorPM"), sep = "\\s", extra = "merge", remove = FALSE)
+
+# pivot_longer all variables except the helper variables (i.e., observed variables)
+pv_data <- pv %>% 
+  pivot_longer(cols = !c("ReadTime", "PVdate", "dayofmonth", "month", "year", "timefactor", "AMorPM", "PVtime"),
+               names_to = "observed_variables",
+               values_to = "observed_values")
+
+# Convert PVDate variable into Date data type -> for date filter in server environment of the RShiny App
+pv$PVdate <- as.Date(pv$PVdate, "%d/%m/%Y")
+pv_data$PVdate <- as.Date(pv_data$PVdate, "%d/%m/%Y")
+
+# Create raw data table -> for the Home page interactive table
+pv_raw <- pv_data %>% 
+  dplyr::select(c(ReadTime, observed_variables, observed_values))
+
+# Create small_df for the Missing Value page's plot 5 (because we need to use varSelectInput() for 
+# gg_miss_fct() function in the server environment to filter by factor)
+small_df <- pv %>% 
+  dplyr::select(c(dayofmonth, month, year, AMorPM, PVtime))
+
+# Create selection_df for the feature selection part
+selection_df <- as_tibble(read.csv(("./data/selection_df.csv"))) %>%
+  dplyr::select(!ReadTime)
+```
+
+### **Global View Codes for Filtering and Plot Parts (i.e., Server environment)**
+**(RShiny App Lines: 1323 - 2218)**
+
+This section will cover all the codes in the server environment for the Global View Page. To simplify the codes' report, in this example, the inputs for each element in the Global View Page are as follow:
+
+1. **Distribution:** Set LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 and all time period as the inputs in the main filter (i.e., blue gear icon). Furthermore, the additional filter (i.e., red gear icon) sets the Remove Zero Observation(s) as "Yes", Remove Negative Observation(s) as "Yes", Remove Outlier(s) as "Yes, Z-Score Approach", and Transformation Method as "Raw";
+2. **Missing Value:** Set LV_Sport_01.PVDB.DB.A, LV_Sport_01.PVDB.DB.B, LV_Sport_01.PVDB.MSSB, LV_North_Pavilion.MSB_PV_DB, and LV_Robert_Blackwood_Hall_2.Main_Solar_Supply from 2020-07-01 to 2021-07-16 and all time period in the main filter (i.e., blue gear icon);
+3. **Outlier:** Set LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 and all time period in the main filter (i.e., blue gear icon);
+4. **Feature Selection:** Set pv_values as a response variable and the remaining variables as an explanatory variable (i.e., use full dataset) in the main filter (i.e., blue gear icon). For the Random Forest and Boruta methods, the app will use randomly sampled 10.000 observations from the big dataset (to reduce the expensive running time for the Random Forest and Boruta methods). This is our validation set. Furthermore, in the Random Forest method, the additional filter (i.e., red gear icon) sets the random forest's parameters of 5 and 10 for mtry and ntree, respectively;
+5. **Trend:** Set LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 in the main filter (i.e., blue gear icon).
+
+#### **Distribution Part (i.e., Server environment)**
+**(RShiny App Lines: 1323 - 1528)**
+
+```{r global-view, echo=TRUE}
+# Global View Codes for Filtering and Plot Parts (i.e., Server environment) (RShiny App Lines: 1323 - 1528)
+
+                                    ##### Distribution Part #####
+
+# (In this example, we will be using LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 and all time period for the main filter (i.e., blue gear icon))
+
+# Step 1. Create gvfiltered_df by filtering observed_variables, PVdate, and PVtime
+gvfiltered_df <- pv_data %>% 
+  filter(observed_variables %in% c("LV_North_Pavilion.MSB_PV_DB")) %>% # filter observed_variables
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter PVdate 
+  filter(!(PVtime %in% c(""))) # filter PVtime
+
+# Step 2. Missing Value DF
+# Since it is a transformation method, we need to remove the missing values before plotting to avoid errors
+gvrmv_na_df <- gvfiltered_df %>% 
+  # Remove NA(s) / Missing Value(s)
+  na.omit()
+
+# (The additional filter (i.e., red gear icon) sets the Remove Zero Observation(s) as "Yes", Remove Negative Observation(s) as "Yes", Remove Outlier(s) as "Yes, Z-Score Approach", and Transformation Method as "Raw".)
+
+# Step 3. Remove Zero Observation(s) Option
+gvrmv_zero_df <- gvfiltered_df %>% 
+  # Remove 0 observation(s)
+  filter(observed_values != 0)
+
+# Step 4. Remove Negative Value(s) Option
+gvrmv_negative_df <- gvrmv_zero_df %>% 
+  # Remove negative value(s)
+  filter(observed_values >= 0)
+
+# Step 5. Remove Outlier(s) Option
+temp_df <- gvrmv_negative_df
+
+# Z-Score Calculation
+right_tailz <- mean(temp_df$observed_values) + 3*sd(temp_df$observed_values)
+left_tailz <- mean(temp_df$observed_values) - 3*sd(temp_df$observed_values)
+
+# IQR Calculation
+# Calculate IQR, Q3, and Q1
+calc_iqr <- IQR(temp_df$observed_values)
+q1 <- as.numeric(quantile(temp_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(temp_df$observed_values, probs = 0.75))
+
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+
+gvrmv_outlier_df <- temp_df %>% 
+  # Remove outlier(s) with Z-Score method as an example
+  filter(observed_values < right_tailz & observed_values > left_tailz)
+
+# Step 6. Transformation Method Option
+gvdused_df1 <- gvrmv_outlier_df %>%
+  mutate(square_data = observed_values^2,
+         cubic_data = observed_values^3,
+         squareroot_data = sqrt(observed_values),
+         cuberoot_data = observed_values^(1/3),
+         logarithm10 = log10(observed_values),
+         logarithmnat = log(observed_values))
+```
+
+```{r global-view1, echo=TRUE}
+# Step 7. Distribution of Density Plot
+ggplot(data=gvdused_df1, aes(x=observed_values, fill="purple")) + 
+  geom_density(adjust=1.5, alpha=.4) +
+  xlab(as.character("LV_North_Pavilion.MSB_PV_DB")) +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+```{r global-view2, echo=TRUE}
+# Step 8. Distribution Plot's Descriptive Statistics
+
+# Step 8.1. Variable Name
+as.character("LV_North_Pavilion.MSB_PV_DB")
+
+# Step 8.2. Number of Observations
+nrow(gvdused_df1)
+
+# Step 8.3. Descriptive Statistics
+summary(gvdused_df1$observed_values)
+
+# Step 8.4. Standard Deviation
+round(sd(gvdused_df1$observed_values), 3)
+
+# Step 8.5. Skewness
+round(skewness(gvdused_df1$observed_values), 3)
+```
+
+```{r global-view3, echo=TRUE}
+# Step 9. Time Series Plot
+
+# Step 9.a. Create datetime_df
+# Step 9.1. Convert ReadTime into datetime data type by using Lubridate package 
+gvdatetime_df <- gvfiltered_df
+gvdatetime_df$ReadTime <- dmy_hm(gvdatetime_df$ReadTime)
+
+# Step 9.2. Create dummy if NA = Missing, and present = Present
+gvdatetime_df$missing_dummy <- ifelse(is.na(gvdatetime_df$observed_values), "Missing", "Present")
+
+# Step 9.b. Plotting (Without Interactive Feature)
+ggplot(gvdatetime_df, aes(x = ReadTime, y = observed_values, group = 1)) +
+      geom_line(color="#0288d1") +
+      geom_vline(xintercept = gvdatetime_df$ReadTime[gvdatetime_df$missing_dummy == "Missing"], color = "red") +
+      xlab("Time") +
+      ylab("LV_North_Pavilion.MSB_PV_DB") +
+      scale_color_discrete(name = "Status") +
+      theme(panel.background = element_rect(fill = "linen")) +
+      theme(plot.background = element_rect(fill = "linen"))
+```
+
+#### **Missing Value Part (i.e., Server environment)**
+**(RShiny App Lines: 1530 - 1682)**
+
+```{r global-view4, echo=TRUE}
+                                    ##### Missing Value Part #####
+## Missing Value Codes for Filtering and Plot Parts (i.e., Server environment) (RShiny App Lines: 1530 - 1682)
+
+# (In this example we will be using LV_Sport_01.PVDB.DB.A, LV_Sport_01.PVDB.DB.B, LV_Sport_01.PVDB.MSSB, LV_North_Pavilion.MSB_PV_DB, and LV_Robert_Blackwood_Hall_2.Main_Solar_Supply from 2020-07-01 to 2021-07-16 and all time period)
+
+# Step 1. Create gvmfiltered_df by filtering observed_variables, PVdate, and PVtime
+gvmfiltered_df <- pv_data %>% 
+  filter(observed_variables %in% c("LV_Sport_01.PVDB.DB.A", 
+                                   "LV_Sport_01.PVDB.DB.B",
+                                   "LV_Sport_01.PVDB.MSSB",
+                                   "LV_North_Pavilion.MSB_PV_DB",
+                                   "LV_Robert_Blackwood_Hall_2.Main_Solar_Supply")) %>% # filter observed_variables
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter Date 
+  filter(!(PVtime %in% c(""))) # filter PVtime
+
+# Step 2. Creating Missing Value Table 
+
+# Step 2.1. Reformat gvmfiltered_df from long to wide format to calculate the number of missing rows easily
+gvmfiltered_df_wider <- gvmfiltered_df %>% 
+  # Change from long into wide format
+  pivot_wider(names_from = observed_variables, values_from = observed_values) %>%
+  # Deselect helper variables
+  dplyr::select(!c(PVdate, dayofmonth, month, year, timefactor, AMorPM, PVtime))
+
+# Step 2.2. Creating Missing Value Dataframe
+gvmmissing_df <- as_tibble(lapply(gvmfiltered_df_wider, function(x) sum(is.na(x)))) %>% 
+      gather(key = "variable_name", value = "missing_count") %>% 
+      # Calculate the total missing values category in the dataset
+      bind_rows(summarise(.,
+                          across(where(is.numeric), sum),
+                          across(where(is.character), ~'Total')))
+
+# Step 2.3. Send the output of missing_df in step 2.2. above to the frontend after filter out the Total category that we created previously
+gvmmissing_df %>% 
+  # Filter out the Total category that we created previously
+  filter(variable_name != "Total")
+```
+
+```{r global-view5, echo=TRUE}
+# Step 3. Missing Value Table's Descriptive Statistics
+
+# Step 3.1. Create gvmfiltered_df_nona to count problematic row (i.e., there is an existence of missing values in one or more columns)
+gvmfiltered_df_nona <- na.omit(gvmfiltered_df_wider) # Remove missing value in the gvmfiltered_df_wider dataframe to find # of rows that is fine (i.e., no missing value)
+  
+# Step 3.2. Number of observations
+nrow(gvmfiltered_df_wider)
+
+# Step 3.3. Total problematic rows
+nrow(gvmfiltered_df_wider) - nrow(gvmfiltered_df_nona)
+
+# Step 3.4. Proportion of problematic rows
+x <- nrow(gvmfiltered_df_wider)
+y <- nrow(gvmfiltered_df_wider) - nrow(gvmfiltered_df_nona)
+z <- round((y / x) * 100, 2)
+    
+# Concatenate string
+paste(as.character(z), "%", sep = "")
+
+# Step 3.5. Number of cells
+nrow(gvmfiltered_df)
+
+# Step 3.6. Total missing by the number of cells
+as.integer(gvmmissing_df[gvmmissing_df$variable_name == "Total", "missing_count"])
+
+# Step 3.7. Proportion of missing by the number of cells
+x <- round(as.integer(gvmmissing_df[gvmmissing_df$variable_name == "Total", "missing_count"]) / nrow(gvmfiltered_df) * 100, 2)
+    
+# Concatenate string
+paste(as.character(x), "%", sep = "")
+```
+
+```{r global-view6, echo=TRUE}
+# Step 4. Missing Value Plot 1 (Stacked Bar-Chart / Where the Missing Plot)
+
+# Create new dataframe that include the calculation of proportion of the missing values for each variable
+newdata <- gvmmissing_df %>% 
+  rename(Missing = missing_count) %>% 
+  filter(variable_name != "Total") %>% 
+  mutate(Present = nrow(gvmfiltered_df_wider) - Missing) %>% 
+  pivot_longer(cols = !c("variable_name"),
+               names_to = "isna",
+               values_to = "total_count") %>% 
+  mutate(pct = total_count / nrow(gvmfiltered_df_wider) * 100)
+
+# Sort from highest to lowest
+levels <-
+  (newdata  %>% filter(isna == "Missing") %>% arrange(pct))$variable_name
+
+# Plotting
+gvmfiltered_df_wider %>%
+  mutate(id = row_number()) %>%
+  gather(-id, key = "key", value = "val") %>%
+  mutate(isna = is.na(val)) %>%
+  ggplot(aes(x = key, y = id, fill = isna)) +
+  geom_tile() +
+  scale_fill_manual(name = "",
+                    values = c('steelblue', 'tomato3'),
+                    labels = c("Present", "Missing"))  +
+  scale_x_discrete(limits = levels) +
+  labs(x = "Variable",
+       y = "Row Number") +
+  coord_flip() +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+#### **Outlier Part (i.e., Server environment)**
+**(RShiny App Lines: 1684 - 1910)**
+
+```{r global-view7, echo=TRUE}
+                                    ##### Outlier Part #####
+## Outlier Codes for Filtering and Plot Parts (i.e., Server environment) (RShiny App Lines: 1684 - 1910)
+
+# (In this example, we will be using LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 and all time period)
+
+# Step 1. Create gvofiltered_df by filtering observed_variables, PVdate, and PVtime
+gvofiltered_df <- pv_data %>% 
+  filter(observed_variables %in% c("LV_North_Pavilion.MSB_PV_DB")) %>% # filter observed_variables
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter PVdate 
+  filter(!(PVtime %in% c(""))) # filter PVtime
+
+# Step 2. Create gvoused_df dataframe for plotting histograms and boxplots (after removing NAs)
+gvoused_df <- gvofiltered_df %>% 
+  na.omit()
+```
+
+> **Z-Score Approach**
+
+```{r global-view8, echo=TRUE}
+                                      ##### Z-Score Approach #####
+
+# Step 3. Interactive table description (Outlier -> Z-Score Approach)
+right_tailz <- mean(gvoused_df$observed_values) + 3*sd(gvoused_df$observed_values)
+left_tailz <- mean(gvoused_df$observed_values) - 3*sd(gvoused_df$observed_values)
+    
+gvoused_df %>% 
+  filter(observed_values > right_tailz | observed_values < left_tailz) %>% 
+  dplyr::select(ReadTime, observed_variables, observed_values)
+```
+
+```{r global-view9, echo=TRUE}
+# Step 4. Z-Score Approach Table's Descriptive Statistics
+
+# Step 4.1. Variable Name
+as.character("LV_North_Pavilion.MSB_PV_DB")
+
+# Step 4.2. Descriptive Statistics
+summary(gvofiltered_df$observed_values)
+
+# Step 4.3. Standard Deviation
+round(sd(gvoused_df$observed_values), 3)
+
+# Step 4.4. Skewness before removing outliers
+round(skewness(gvoused_df$observed_values), 3)
+
+# Step 4.5. Upper Limit: mean + 3 * stdev
+round(mean(gvoused_df$observed_values) + 3*sd(gvoused_df$observed_values), 3)
+
+# Step 4.6. Lower Limit: mean - 3 * stdev
+round(mean(gvoused_df$observed_values) - 3*sd(gvoused_df$observed_values), 3)
+```
+
+```{r global-view10, echo=TRUE}
+# Step 5. Z-Score outlier density plot (before -> plot 1)
+used_df <- gvoused_df
+
+# Vertical line for the right and left tails
+right_tailz <- mean(used_df$observed_values) + 3*sd(used_df$observed_values)
+left_tailz <- mean(used_df$observed_values) - 3*sd(used_df$observed_values)
+
+# Plotting
+ggplot(data=used_df, aes(x=observed_values, fill="purple")) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_tailz, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_tailz, linetype="dashed", color = "red") +
+  xlab("LV_North_Pavilion.MSB_PV_DB") +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+```{r global-view11, echo=TRUE}
+# Step 6. Z-Score outlier boxplot (before -> plot 2)
+used_df <- gvoused_df
+    
+# Plotting
+used_df %>% 
+  ggplot(aes(x = observed_values, y = observed_variables)) +
+  geom_boxplot(outlier.color="red") +
+  labs(x = "Value",
+       y = "Observed Variables") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(axis.text.y = element_text(angle = 90, vjust = 1, hjust=0.5))
+```
+
+> **IQR Approach**
+
+```{r global-view12, echo=TRUE}
+                                      ##### IQR Approach #####
+
+# Step 3. Interactive table description (Outlier -> IQR Approach)
+# Calculate IQR, Q3, and Q1
+calc_iqr <- IQR(gvoused_df$observed_values)
+q1 <- as.numeric(quantile(gvoused_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(gvoused_df$observed_values, probs = 0.75))
+
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+
+gvoused_df %>% 
+  filter(observed_values > right_taili | observed_values < left_taili) %>% 
+  dplyr::select(ReadTime, observed_variables, observed_values)
+```
+
+```{r global-view13, echo=TRUE}
+# Step 4. IQR Approach Table's Descriptive Statistics
+
+# Step 4.1. Variable Name
+as.character("LV_North_Pavilion.MSB_PV_DB")
+
+# Step 4.2. Descriptive Statistics
+summary(gvofiltered_df$observed_values)
+
+# Step 4.3. Inter-Quartile Range (IQR)
+round(IQR(gvoused_df$observed_values), 3)
+
+# Step 4.4. Skewness before removing outliers
+round(skewness(gvoused_df$observed_values), 3)
+
+# Step 4.5. Upper Limit: Q3 + 1.5 * IQR
+# Calculate IQR, and Q3
+calc_iqr <- IQR(gvoused_df$observed_values)
+q3 <- as.numeric(quantile(gvoused_df$observed_values, probs = 0.75))
+    
+round(q3 + 1.5 * calc_iqr, 3)
+
+# Step 4.6. Lower Limit: Q1 - 1.5 * IQR
+# Calculate IQR and Q1
+calc_iqr <- IQR(gvoused_df$observed_values)
+q1 <- as.numeric(quantile(gvoused_df$observed_values, probs = 0.25))
+    
+round(q1 - 1.5 * calc_iqr, 3)
+```
+
+```{r global-view14, echo=TRUE}
+# Step 5. IQR outlier density plot (before -> plot 1)
+used_df <- gvoused_df
+    
+# Calculate IQR, Q3, and Q1
+calc_iqr <- IQR(used_df$observed_values)
+q1 <- as.numeric(quantile(used_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(used_df$observed_values, probs = 0.75))
+
+# Vertical line for the right and left tails
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+
+# Plotting
+ggplot(data=used_df, aes(x=observed_values, fill="purple")) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_taili, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_taili, linetype="dashed", color = "red") +
+  xlab("LV_North_Pavilion.MSB_PV_DB") +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+```{r global-view15, echo=TRUE}
+# Step 6. IQR outlier boxplot (before -> plot 2)
+used_df <- gvoused_df
+    
+# Plotting
+used_df %>% 
+  ggplot(aes(x = observed_values, y = observed_variables)) +
+  geom_boxplot(outlier.color="red") +
+  labs(x = "Value",
+       y = "Observed Variables") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(axis.text.y = element_text(angle = 90, vjust = 1, hjust=0.5))
+```
+
+#### **Feature Selection Part (i.e., Server environment)**
+**(RShiny App Lines: 1912 - 2078)**
+
+```{r global-view16, echo=TRUE}
+                                  ##### Feature Selection Part #####
+## Feature Selection Codes for Filtering and Plot Parts (i.e., Server environment) (RShiny App Lines: 1912 - 2078)
+
+# Step 1. Randomly sampled 10.000 observations from the big dataset (To reduce the expensive running time for the Random Forest and Boruta methods). This is our validation set.
+
+set.seed(8)
+
+gvmini_selection_df <- if (nrow(selection_df)  > 10000) {
+  selection_df[sample(nrow(selection_df), 10000), ]
+} else {
+  selection_df
+}
+```
+
+```{r global-view17, echo=TRUE}
+# Step 2a. Linear Regression Method
+
+# (In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable (Use full dataset))
+
+# Fit the model
+
+# Step 2a.1. Set Seed
+set.seed(8)
+
+# Step 2a.2. Fitting the model
+gvlmMod <- lm(pv_values ~ ., data = selection_df)  # fit lm() model
+```
+
+```{r global-view18, echo=TRUE}
+# Step 2a.3. Calculate the variable importance
+gvrelImportance <- varImp(gvlmMod, scale = FALSE)  # calculate variable importance scaled to 100
+```
+
+```{r global-view19, echo=TRUE}
+# Step 2a.4. Visualize variable importance
+# Get variable importance from the model fit
+gvImpDataRI <- as.data.frame(gvrelImportance) %>% 
+  rename(VImportance = "Overall") %>% 
+  arrange(desc(VImportance))
+gvImpDataRI$Var_Names <- row.names(gvImpDataRI)
+
+# Plotting
+ggplot(gvImpDataRI, aes(x=Var_Names, y=VImportance)) +
+  geom_segment( aes(x=Var_Names, xend=Var_Names, y=0, yend=VImportance), color="skyblue") +
+  geom_point(color="blue", alpha=0.6) +
+  coord_flip() +
+  xlab("Variable") +
+  ylab("variable Importance") +
+  theme(
+    legend.position="bottom",
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank()
+  ) +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r global-view20, echo=TRUE}
+# Step 2b. Random Forest Method
+# Ref: https://hackernoon.com/random-forest-regression-in-r-code-and-interpretation
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable with the random forest's parameters of 5 and 10 for mtry and ntree, respectively. (Use randomly sampled 10000 observations from the big dataset)
+
+# Step 2b.1. Set Seed
+set.seed(8)
+
+# Step 2b.2. Fit the random forest model with mtry = 5 and ntree = 10
+gvrf_fit <- randomForest(pv_values ~ ., data=gvmini_selection_df, mtry=5, ntree=10,
+                       keep.forest=FALSE, importance=TRUE)
+```
+
+```{r global-view21, echo=TRUE}
+gvrf_fit
+```
+
+```{r global-view22, echo=TRUE}
+# Step 2b.3. Visualize variable importance
+# Get variable importance from the model fit
+gvImpData <- as.data.frame(importance(gvrf_fit))
+gvImpData$Var_Names <- row.names(gvImpData)
+
+# Plotting
+ggplot(gvImpData, aes(x=Var_Names, y=`%IncMSE`)) +
+  geom_segment( aes(x=Var_Names, xend=Var_Names, y=0, yend=`%IncMSE`), color="skyblue") +
+  geom_point(aes(size = IncNodePurity), color="blue", alpha=0.6) +
+  coord_flip() +
+  xlab("Variable") +
+  theme(
+    legend.position="bottom",
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank()
+  ) +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r global-view23, echo=TRUE}
+# Step 2c. MARS Method
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable (Use full dataset)
+
+# Step 2c.1. Set Seed
+set.seed(8)
+
+# Step 2c.2. Fitting the model and calculate the variable importance
+gvmarsModel <- earth(pv_values ~ ., data=selection_df) # build model
+```
+
+```{r global-view24, echo=TRUE}
+# Step 2c.3. Estimate the variable importance
+gvev <- evimp(gvmarsModel) # estimate variable importance
+
+# Step 2c.4. Visualize variable importance
+plot(gvev)
+```
+
+```{r global-view25, echo=TRUE}
+# Step 2d. Boruta Method
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable. (Use randomly sampled 10000 observations from the big dataset)
+
+# Step 2d.1. Set Seed
+set.seed(8)
+
+# Step 2d.2. Fitting the model and calculate the variable importance
+gvboruta_output <- Boruta(pv_values ~ ., data=gvmini_selection_df, doTrace=2, maxRuns=25)  # perform Boruta search
+```
+
+```{r global-view26, echo=TRUE}
+# Step 2d.3. Plotting the variable importance
+plot(gvboruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")  # plot variable importance
+```
+
+#### **Trend Part (i.e., Server environment)**
+**(RShiny App Lines: 2081 - 2125)**
+
+```{r global-view27, echo=TRUE}
+                                       ##### Trend Part #####
+## Trend Codes for Filtering and Plot Parts (i.e., Server environment) (RShiny App Lines: 2081 - 2125)
+
+# (In this example, we will be using LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16)
+
+# Step 1. Create trend_df -> the subset of pv dataset after filtered by date and variable
+gvtrend_df <- pv %>% 
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter Date
+  dplyr::select(c(ReadTime, LV_North_Pavilion.MSB_PV_DB)) %>% # filter column
+  na.omit() # remove NAs
+```
+
+```{r global-view28, echo=TRUE}
+# Step 2. Change the trend_df into time series (ts) object
+
+# Step 2a. Convert ReadTime into datetime data type by using Lubridate package 
+gvtrenddatetime_df <- gvtrend_df
+gvtrenddatetime_df$ReadTime <- dmy_hm(gvtrenddatetime_df$ReadTime)
+
+# Step 2b. Convert dataframe to time series
+gvtseries <- read.zoo(gvtrenddatetime_df)
+
+# Step 2c. Convert to ts object
+gvtseries_ts <- ts(gvtseries, frequency = 96)
+```
+
+```{r global-view29, echo=TRUE}
+# Step 3. Decompose the trend
+gvdecomposed_tseries_ts <- decompose(gvtseries_ts,type='multiplicative')
+
+# Step 4. Plotting
+plot(gvdecomposed_tseries_ts)
+```
+
+### **Distribution Analysis Codes for Filtering and Plot Parts (i.e., Server environment)**
+**(RShiny App Lines: 2158 - 2487)**
+
+This section will cover all the codes in the server environment for the Distribution Page. To simplify the codes' report, in this example, the inputs for each element in the Distribution Page are as follow:
+
+1. Set LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 and all time period in the main filter (i.e., blue gear icon);
+2. For the Distribution Plot, the additional filter (i.e., red gear icon) sets the Remove Zero Observation(s) as "Yes", Remove Negative Observation(s) as "Yes", Remove Outlier(s) as "Yes, Z-Score Approach", and Transformation Method as "Raw". 
+
+```{r distribution-page, echo=TRUE}
+# Distribution Analysis Codes for Filtering and Plot Parts (i.e., Server environment) (RShiny App Lines: 2158 - 2487)
+
+# (In this example, we will be using LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 and all time period)
+
+# Step 1. Create dfiltered_df by filtering observed.variables, Date, and PVtime
+dfiltered_df <- pv_data %>% 
+  filter(observed_variables %in% c("LV_North_Pavilion.MSB_PV_DB")) %>% # filter observed.variables
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter Date 
+  filter(!(PVtime %in% c(""))) # filter PVtime
+
+# Step 2. Missing Value DF
+# Since it is a transformation method, we need to remove the missing values before plotting to avoid errors
+rmv_na_df <- dfiltered_df %>% 
+  # Remove NA(s) / Missing Value(s)
+  na.omit()
+
+# (The additional filter (i.e., red gear icon) sets the Remove Zero Observation(s) as "Yes", Remove Negative Observation(s) as "Yes", Remove Outlier(s) as "Yes, Z-Score Approach", and Transformation Method as "Raw".)
+
+rmv_zero_df <- rmv_na_df %>% 
+  # Remove 0 observation(s)
+  filter(observed_values != 0)
+
+# Step 4. Remove Negative Value(s) Option
+rmv_negative_df <- rmv_zero_df %>% 
+  # Remove negative value(s)
+  filter(observed_values >= 0)
+
+# Step 5. Remove Outlier(s) Option
+temp_df <- rmv_negative_df
+
+# Z-Score Calculation
+right_tailz <- mean(temp_df$observed_values) + 3*sd(temp_df$observed_values)
+left_tailz <- mean(temp_df$observed_values) - 3*sd(temp_df$observed_values)
+
+# IQR Calculation
+# Calculate IQR, Q3, and Q1
+calc_iqr <- IQR(temp_df$observed_values)
+q1 <- as.numeric(quantile(temp_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(temp_df$observed_values, probs = 0.75))
+
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+
+rmv_outlier_df <- temp_df %>% 
+  # Remove outlier(s) with Z-Score method as an example
+  filter(observed_values < right_tailz & observed_values > left_tailz)
+
+# Step 6. Transformation Method Option
+dused_df1 <- rmv_outlier_df %>%
+  mutate(square_data = observed_values^2,
+         cubic_data = observed_values^3,
+         squareroot_data = sqrt(observed_values),
+         cuberoot_data = observed_values^(1/3),
+         logarithm10 = log10(observed_values),
+         logarithmnat = log(observed_values))
+```
+
+```{r distribution-page1, echo=TRUE}
+# Step 7. Distribution of Density Plot
+ggplot(data=dused_df1, aes(x=observed_values, fill="purple")) + 
+  geom_density(adjust=1.5, alpha=.4) +
+  xlab(as.character("LV_North_Pavilion.MSB_PV_DB")) +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+```{r distribution-page2, echo=TRUE}
+# Step 8. Distribution Plot's Descriptive Statistics
+
+# Step 8.1. Variable Name
+as.character("LV_North_Pavilion.MSB_PV_DB")
+
+# Step 8.2. Number of Observations
+nrow(dused_df1)
+
+# Step 8.3. Descriptive Statistics
+summary(dused_df1$observed_values)
+
+# Step 8.4. Standard Deviation
+round(sd(dused_df1$observed_values), 3)
+
+# Step 8.5. Skewness
+round(skewness(dused_df1$observed_values), 3)
+```
+
+```{r distribution-page3, echo=TRUE}
+# Step 9. Negative Values Table
+negative_df_step9 <- dfiltered_df %>% 
+  # Filter negative value(s)
+  filter(observed_values < 0) %>% 
+  dplyr::select(ReadTime, observed_variables, observed_values)
+
+negative_df_step9
+```
+
+```{r distribution-page4, echo=TRUE}
+# Step 10. Negative Values Table's Descriptive Statistics
+negative_df <- dfiltered_df %>% 
+  # Filter negative value(s)
+  filter(observed_values < 0)
+
+# Step 10.1. Variable Name
+as.character("LV_North_Pavilion.MSB_PV_DB")
+
+# Step 10.2. Number of Observations
+nrow(negative_df)
+
+# Step 10.3. Descriptive Statistics
+summary(negative_df$observed_values)
+
+# Step 10.4. Standard Deviation
+round(sd(negative_df$observed_values), 3)
+
+# Step 10.5. Skewness
+round(skewness(negative_df$observed_values), 3)
+```
+
+```{r distribution-page5, echo=TRUE}
+# Step 11. Zero Value Table
+zero_df_step11 <- dfiltered_df %>% 
+  # Filter negative value(s)
+  filter(observed_values == 0) %>% 
+  dplyr::select(ReadTime, observed_variables, observed_values)
+
+zero_df_step11
+```
+
+```{r distribution-page6, echo=TRUE}
+# Step 12. Zero Value Count Plot
+
+# Step 12.1. Create Wider format dataset after filtering only zero values
+zero_df_step12 <- dfiltered_df %>%
+  filter(observed_values == 0) %>% 
+  dplyr::select(PVtime, observed_values) %>% 
+  count(PVtime, sort = TRUE) %>% 
+  rename(zero_count = n)
+
+# Step 12.2. Plotting
+zero_df_step12 %>% 
+  ggplot(aes(x = zero_count, y = PVtime, fill = as.factor(PVtime),
+             text=paste("Time: ", PVtime,
+                            "\nZero Value: ", zero_count))) + # Text=paste() only for Plotly
+  geom_bar(stat="identity", alpha=.6, width=.4) +
+  xlab("Number of Zero Values") +
+  ylab("Time") +
+  theme(legend.position="none") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r distribution-page7, echo=TRUE}
+# Step 13. Time Series Plot
+
+# Step 13.a. Create datetime_df
+# Step 13.1. Convert ReadTime into datetime data type by using Lubridate package 
+datetime_df <- dfiltered_df
+datetime_df$ReadTime <- dmy_hm(datetime_df$ReadTime)
+
+# Step 13.2. Create dummy if NA = Missing, and present = Present
+datetime_df$missing_dummy <- ifelse(is.na(datetime_df$observed_values), "Missing", "Present")
+
+# Step 13.b. Plotting (Without Interactive Feature)
+ggplot(datetime_df, aes(x = ReadTime, y = observed_values, group = 1)) +
+      geom_line(color="#0288d1") +
+      geom_vline(xintercept = datetime_df$ReadTime[datetime_df$missing_dummy == "Missing"], color = "red") +
+      xlab("Time") +
+      ylab("LV_North_Pavilion.MSB_PV_DB") +
+      scale_color_discrete(name = "Status") +
+      theme(panel.background = element_rect(fill = "linen")) +
+      theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r distribution-page8, eval=FALSE, echo=TRUE}
+# Step 13.c. Plotting (With Interactive Feature)
+p <- ggplot(datetime_df, aes(x = ReadTime, y = observed_values, group = 1, 
+                             text=paste("Date: ", PVdate,
+                                        "\nTime: ", PVtime,
+                                        "\nValue: ", observed_values,
+                                        "\nStatus: ", missing_dummy))) +
+  geom_line(color="#0288d1") +
+  xlab("Time") +
+  ylab("LV_North_Pavilion.MSB_PV_DB") +
+  scale_color_discrete(name = "Status") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+
+ggplotly(p, tooltip = "text")
+```
+
+### **Missing Value Codes for Filtering and Plot Parts (i.e., Server environment)**
+**(RShiny App Lines: 2489 - 2744)**
+
+This section will cover all the codes in the server environment for the Missing Value Page. To simplify the codes' report, in this example, the inputs for each element in the Missing Value Page are as follow:
+
+1. Set LV_Sport_01.PVDB.DB.A, LV_Sport_01.PVDB.DB.B, LV_Sport_01.PVDB.MSSB, LV_North_Pavilion.MSB_PV_DB, and LV_Robert_Blackwood_Hall_2.Main_Solar_Supply from 2020-07-01 to 2021-07-16 and all time period in the main filter (i.e., blue gear icon);
+2. For the UpsetR Plot, the additional filter (i.e., red gear icon) sets Observed Variables as "LV_Sport_01.PVDB.DB.A, LV_Sport_01.PVDB.DB.B, LV_Sport_01.PVDB.MSSB, LV_North_Pavilion.MSB_PV_DB, and LV_Robert_Blackwood_Hall_2.Main_Solar_Supply";
+3. For the Missingness across Factors Plot, the additional filter (i.e., red gear icon) sets Categorical Variable (Factor) as "AMorPM".
+
+```{r missing-page, echo=TRUE}
+## Missing Value Codes for Filtering and Plot Parts (i.e., Server environment) 
+# (RShiny App Lines: 2489 - 2744)
+
+# (In this example we will be using LV_Sport_01.PVDB.DB.A, LV_Sport_01.PVDB.DB.B, LV_Sport_01.PVDB.MSSB, LV_North_Pavilion.MSB_PV_DB, and LV_Robert_Blackwood_Hall_2.Main_Solar_Supply from 2020-07-01 to 2021-07-16 and all time period)
+
+# Step 1. Create filtered_df by filtering observed.variables, Date, and PVtime
+filtered_df <- pv_data %>% 
+  filter(observed_variables %in% c("LV_Sport_01.PVDB.DB.A", 
+                                   "LV_Sport_01.PVDB.DB.B",
+                                   "LV_Sport_01.PVDB.MSSB",
+                                   "LV_North_Pavilion.MSB_PV_DB",
+                                   "LV_Robert_Blackwood_Hall_2.Main_Solar_Supply")) %>% # filter observed.variables
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter Date 
+  filter(!(PVtime %in% c(""))) # filter PVtime
+
+# Step 2. Creating Missing Value Table 
+
+# Step 2.1. Reformat filtered_df from long to wide format to calculate the number of missing rows easily
+filtered_df_wider <- filtered_df %>% 
+  # Change from long into wide format
+  pivot_wider(names_from = observed_variables, values_from = observed_values) %>%
+  # Deselect helper variables
+  dplyr::select(!c(PVdate, dayofmonth, month, year, timefactor, AMorPM, PVtime))
+
+# Step 2.2. Creating Missing Value Dataframe
+missing_df <- as_tibble(lapply(filtered_df_wider, function(x) sum(is.na(x)))) %>% 
+      gather(key = "variable_name", value = "missing_count") %>% 
+      # Calculate the total missing values category in the dataset
+      bind_rows(summarise(.,
+                          across(where(is.numeric), sum),
+                          across(where(is.character), ~'Total')))
+
+# Step 2.3. Send the output of missing_df in step 2.2. above to the frontend after filter out the
+# Total category that we created previously
+missing_df %>% 
+  # Filter out the Total category that we created previously
+  filter(variable_name != "Total")
+```
+
+```{r missing-page1, echo=TRUE}
+# Step 3. Missing Value Table's Descriptive Statistics
+
+# Step 3.1. Create filtered_df_nona to count problematic row (i.e., there is an existence of missing values in one or more columns)
+filtered_df_nona <- na.omit(filtered_df_wider) # Remove missing value in the filtered_df_wider dataframe to find # of rows that is fine (i.e., no missing value)
+  
+# Step 3.2. Number of observations
+nrow(filtered_df_wider)
+
+# Step 3.3. Total problematic rows
+nrow(filtered_df_wider) - nrow(filtered_df_nona)
+
+# Step 3.4. Proportion of problematic rows
+x <- nrow(filtered_df_wider)
+y <- nrow(filtered_df_wider) - nrow(filtered_df_nona)
+z <- round((y / x) * 100, 2)
+    
+# Concatenate string
+paste(as.character(z), "%", sep = "")
+
+# Step 3.5. Number of cells
+nrow(filtered_df)
+
+# Step 3.6. Total missing by the number of cells
+as.integer(missing_df[missing_df$variable_name == "Total", "missing_count"])
+
+# Step 3.7. Proportion of missing by the number of cells
+x <- round(as.integer(missing_df[missing_df$variable_name == "Total", "missing_count"]) / nrow(filtered_df) * 100, 2)
+    
+# Concatenate string
+paste(as.character(x), "%", sep = "")
+```
+
+```{r missing-page2, echo=TRUE}
+# Step 4. Missing Value Plot 1 (Count Plot)
+
+# Filter out Total category in the variable_name variable
+missing_df <- missing_df %>% 
+  filter(variable_name != "Total")
+
+missing_df %>% 
+      # Order by missing_count
+  arrange(missing_count) %>% 
+  mutate(variable_name=factor(variable_name, levels=variable_name)) %>% 
+  ggplot(aes(x=variable_name, y=missing_count,
+             # Text only for plotly
+             text=paste("Building Name: ", variable_name,
+                        "\nMissing Value: ", missing_count))) +
+  geom_segment(aes(x=variable_name, xend=variable_name, y=0, yend=missing_count), color="black") +
+  geom_point(color="orange", size=1, alpha=1) +
+  theme_light() +
+  coord_flip() +
+  xlab("Variable") +
+  ylab("Number of Missing Values") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r missing-page3, echo=TRUE}
+# Step 5. Missing Value Plot 2 (Proportion Plot)
+
+# Create new dataframe that include the calculation of proportion of the missing values for each variable
+newdata <- missing_df %>% 
+  rename(Missing = missing_count) %>% 
+  filter(variable_name != "Total") %>% 
+  mutate(Present = nrow(filtered_df_wider) - Missing) %>% 
+  pivot_longer(cols = !c("variable_name"),
+               names_to = "isna",
+               values_to = "total_count") %>% 
+  mutate(pct = total_count / nrow(filtered_df_wider) * 100)
+
+# Sort from highest to lowest
+levels <-
+  (newdata  %>% filter(isna == "Missing") %>% arrange(pct))$variable_name
+
+# Plotting
+newdata %>%
+  ggplot(aes(x = reorder(variable_name, pct), 
+             y = pct, fill=isna,
+             text=paste("Building Name: ", variable_name,
+                        "\nStatus: ", isna,
+                        "\nCount: ", total_count,
+                        "\nPercentage: ", paste(round(pct, 2), "%", sep = "")))) +
+  geom_bar(stat = 'identity', alpha=0.8) +
+  scale_x_discrete(limits = levels) +
+  scale_fill_manual(name = "", 
+                    values = c('tomato3', 'steelblue')) +
+  coord_flip() +
+  labs(x ='Variable', 
+       y = "Percentage of missing values") +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank()) +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r missing-page4, echo=TRUE}
+# Step 6. Missing Value Plot 3 (Stacked Bar-Chart / Where the Missing Plot)
+
+# Create new dataframe that include the calculation of proportion of the missing values for each variable
+newdata <- missing_df %>% 
+  rename(Missing = missing_count) %>% 
+  filter(variable_name != "Total") %>% 
+  mutate(Present = nrow(filtered_df_wider) - Missing) %>% 
+  pivot_longer(cols = !c("variable_name"),
+               names_to = "isna",
+               values_to = "total_count") %>% 
+  mutate(pct = total_count / nrow(filtered_df_wider) * 100)
+
+# Sort from highest to lowest
+levels <-
+  (newdata  %>% filter(isna == "Missing") %>% arrange(pct))$variable_name
+
+# Plotting
+filtered_df_wider %>%
+  mutate(id = row_number()) %>%
+  gather(-id, key = "key", value = "val") %>%
+  mutate(isna = is.na(val)) %>%
+  ggplot(aes(x = key, y = id, fill = isna)) +
+  geom_tile() +
+  scale_fill_manual(name = "",
+                    values = c('steelblue', 'tomato3'),
+                    labels = c("Present", "Missing"))  +
+  scale_x_discrete(limits = levels) +
+  labs(x = "Variable",
+       y = "Row Number") +
+  coord_flip() +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r missing-page5, echo=TRUE}
+# Step 7. Missing Value Plot 4 (Exploring patterns with UpSetR)
+
+newdata <- filtered_df %>% 
+  filter(observed_variables %in% c("LV_Sport_01.PVDB.DB.A", 
+                                   "LV_Sport_01.PVDB.DB.B",
+                                   "LV_Sport_01.PVDB.MSSB",
+                                   "LV_North_Pavilion.MSB_PV_DB",
+                                   "LV_Robert_Blackwood_Hall_2.Main_Solar_Supply")) %>% 
+  # Change into pivot wider
+  pivot_wider(names_from = observed_variables, values_from = observed_values) %>% 
+  dplyr::select(!c(PVdate, dayofmonth, month, year, timefactor, AMorPM, PVtime))
+    
+gg_miss_upset(newdata, nsets = 5,
+              mainbar.y.label="Number of NAs based on Intersection Size (Group)")
+```
+
+```{r missing-page6, echo=TRUE}
+# Step 8. Missing Value Plot 5 (Missingness across Factors Plot)
+
+newdata <- filtered_df %>% 
+  pivot_wider(names_from = observed_variables, values_from = observed_values) %>% 
+  dplyr::select(!c(PVdate, timefactor))
+    
+gg_miss_fct(x = newdata, fct = AMorPM) + # In this case, we will use AMorPM factor
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(axis.text.x = element_text(angle = 0)) +
+  ylab("Variable")
+```
+
+### **Outlier Codes for Filtering and Plot Parts (i.e., Server environment)**
+**(RShiny App Lines: 2746 - 3072)**
+
+This section will cover all the codes in the server environment for the Outlier Page. To simplify the codes' report, in this example, the inputs for each element in the Outlier Page are as follow:
+
+1. Set LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 and all time period in the main filter (i.e., blue gear icon);
+
+```{r outlier-page, echo=TRUE}
+# Outlier Codes for Filtering and Plot Parts (i.e., Server environment) 
+# (RShiny App Lines: 2746 - 3072)
+
+# (In this example, we will be using LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 and all time period)
+
+# Step 1. Create ofiltered_df by filtering observed.variables, Date, and PVtime
+ofiltered_df <- pv_data %>% 
+  filter(observed_variables %in% c("LV_North_Pavilion.MSB_PV_DB")) %>% # filter observed.variables
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter Date 
+  filter(!(PVtime %in% c(""))) # filter PVtime
+
+# Step 2. Create oused_df dataframe for plotting histograms and boxplots (after removing NAs)
+oused_df <- ofiltered_df %>% 
+  na.omit()
+```
+
+#### **Z-Score Approach**
+
+```{r outlier-page1, echo=TRUE}
+                                      ##### Z-Score Approach #####
+
+# Step 3. Interactive table description (Outlier -> Z-Score Approach)
+right_tailz <- mean(oused_df$observed_values) + 3*sd(oused_df$observed_values)
+left_tailz <- mean(oused_df$observed_values) - 3*sd(oused_df$observed_values)
+    
+oused_df %>% 
+  filter(observed_values > right_tailz | observed_values < left_tailz) %>% 
+  dplyr::select(ReadTime, observed_variables, observed_values)
+```
+
+```{r outlier-page2, echo=TRUE}
+# Step 4. Z-Score Approach Table's Descriptive Statistics
+
+# Step 4.1. Variable Name
+as.character("LV_North_Pavilion.MSB_PV_DB")
+
+# Step 4.2. Descriptive Statistics
+summary(ofiltered_df$observed_values)
+
+# Step 4.3. Standard Deviation
+round(sd(oused_df$observed_values), 3)
+
+# Step 4.4. Skewness before removing outliers
+round(skewness(oused_df$observed_values), 3)
+
+# Step 4.5. Upper Limit: mean + 3 * stdev
+round(mean(oused_df$observed_values) + 3*sd(oused_df$observed_values), 3)
+
+# Step 4.6. Lower Limit: mean - 3 * stdev
+round(mean(oused_df$observed_values) - 3*sd(oused_df$observed_values), 3)
+```
+
+```{r outlier-page3, echo=TRUE}
+# Step 5. Z-Score outlier density plot (before -> plot 1)
+used_df <- oused_df
+
+# Vertical line for the right and left tails
+right_tailz <- mean(used_df$observed_values) + 3*sd(used_df$observed_values)
+left_tailz <- mean(used_df$observed_values) - 3*sd(used_df$observed_values)
+
+# Plotting
+ggplot(data=used_df, aes(x=observed_values, fill="purple")) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_tailz, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_tailz, linetype="dashed", color = "red") +
+  xlab("LV_North_Pavilion.MSB_PV_DB") +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+```{r outlier-page4, echo=TRUE}
+# Step 6. Z-Score outlier boxplot (before -> plot 2)
+used_df <- oused_df
+    
+# Plotting
+used_df %>% 
+  ggplot(aes(x = observed_values, y = observed_variables)) +
+  geom_boxplot(outlier.color="red") +
+  labs(x = "Value",
+       y = "Observed Variables") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(axis.text.y = element_text(angle = 90, vjust = 1, hjust=0.5))
+```
+
+```{r outlier-page5, echo=TRUE}
+# Step 7. Z-Score outlier density plot (after -> plot 3)
+used_df <- oused_df
+    
+# Vertical line for the right and left tails
+right_tailz <- mean(used_df$observed_values) + 3*sd(used_df$observed_values)
+left_tailz <- mean(used_df$observed_values) - 3*sd(used_df$observed_values)
+    
+# Plotting
+used_df %>% 
+  filter(observed_values < right_tailz & observed_values > left_tailz) %>% 
+  ggplot(aes(x=observed_values, fill="purple")) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_tailz, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_tailz, linetype="dashed", color = "red") +
+  xlab("LV_North_Pavilion.MSB_PV_DB") +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+```{r outlier-page6, echo=TRUE}
+# Step 8. Z-Score outlier boxplot (after -> plot 4)
+used_df <- oused_df
+    
+# Vertical line for the right and left tails
+right_tailz <- mean(used_df$observed_values) + 3*sd(used_df$observed_values)
+left_tailz <- mean(used_df$observed_values) - 3*sd(used_df$observed_values)
+    
+# Plotting
+used_df %>% 
+  filter(observed_values < right_tailz & observed_values > left_tailz) %>%
+  ggplot(aes(x = observed_values, y = observed_variables)) +
+  geom_boxplot(outlier.color="red") +
+  labs(x = "Value",
+       y = "Observed Variables") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(axis.text.y = element_text(angle = 90, vjust = 1, hjust=0.5))
+```
+
+#### **IQR Approach**
+
+```{r outlier-page7, echo=TRUE}
+                                      ##### IQR Approach #####
+
+# Step 3. Interactive table description (Outlier -> IQR Approach)
+# Calculate IQR, Q3, and Q1
+calc_iqr <- IQR(oused_df$observed_values)
+q1 <- as.numeric(quantile(oused_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(oused_df$observed_values, probs = 0.75))
+
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+
+oused_df %>% 
+  filter(observed_values > right_taili | observed_values < left_taili) %>% 
+  dplyr::select(ReadTime, observed_variables, observed_values)
+```
+
+```{r outlier-page8, echo=TRUE}
+# Step 4. IQR Approach Table's Descriptive Statistics
+
+# Step 4.1. Variable Name
+as.character("LV_North_Pavilion.MSB_PV_DB")
+
+# Step 4.2. Descriptive Statistics
+summary(ofiltered_df$observed_values)
+
+# Step 4.3. Inter-Quartile Range (IQR)
+round(IQR(oused_df$observed_values), 3)
+
+# Step 4.4. Skewness before removing outliers
+round(skewness(oused_df$observed_values), 3)
+
+# Step 4.5. Upper Limit: Q3 + 1.5 * IQR
+# Calculate IQR, and Q3
+calc_iqr <- IQR(oused_df$observed_values)
+q3 <- as.numeric(quantile(oused_df$observed_values, probs = 0.75))
+    
+round(q3 + 1.5 * calc_iqr, 3)
+
+# Step 4.6. Lower Limit: Q1 - 1.5 * IQR
+# Calculate IQR and Q1
+calc_iqr <- IQR(oused_df$observed_values)
+q1 <- as.numeric(quantile(oused_df$observed_values, probs = 0.25))
+    
+round(q1 - 1.5 * calc_iqr, 3)
+```
+
+```{r outlier-page9, echo=TRUE}
+# Step 5. IQR outlier density plot (before -> plot 1)
+used_df <- oused_df
+    
+# Calculate IQR, Q3, and Q1
+calc_iqr <- IQR(used_df$observed_values)
+q1 <- as.numeric(quantile(used_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(used_df$observed_values, probs = 0.75))
+
+# Vertical line for the right and left tails
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+
+# Plotting
+ggplot(data=used_df, aes(x=observed_values, fill="purple")) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_taili, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_taili, linetype="dashed", color = "red") +
+  xlab("LV_North_Pavilion.MSB_PV_DB") +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+```{r outlier-page10, echo=TRUE}
+# Step 6. IQR outlier boxplot (before -> plot 2)
+used_df <- oused_df
+    
+# Plotting
+used_df %>% 
+  ggplot(aes(x = observed_values, y = observed_variables)) +
+  geom_boxplot(outlier.color="red") +
+  labs(x = "Value",
+       y = "Observed Variables") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(axis.text.y = element_text(angle = 90, vjust = 1, hjust=0.5))
+```
+
+```{r outlier-page11, echo=TRUE}
+# Step 7. IQR outlier density plot (after -> plot 3)
+used_df <- oused_df
+    
+# Calculate IQR, Q3, and Q1
+calc_iqr <- IQR(used_df$observed_values)
+q1 <- as.numeric(quantile(used_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(used_df$observed_values, probs = 0.75))
+    
+# Vertical line for the right and left tails
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+    
+# Plotting
+used_df %>% 
+  filter(observed_values < right_taili & observed_values > left_taili) %>% 
+  ggplot(aes(x=observed_values, fill="purple")) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_taili, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_taili, linetype="dashed", color = "red") +
+  xlab("LV_North_Pavilion.MSB_PV_DB") +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+```{r outlier-page12, echo=TRUE}
+# Step 8. Z-Score outlier boxplot (after -> plot 4)
+used_df <- oused_df
+    
+# Calculate IQR, Q3, and Q1
+calc_iqr <- IQR(used_df$observed_values)
+q1 <- as.numeric(quantile(used_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(used_df$observed_values, probs = 0.75))
+    
+# Vertical line for the right and left tails
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+    
+# Plotting
+used_df %>% 
+  filter(observed_values < right_taili & observed_values > left_taili) %>%
+  ggplot(aes(x = observed_values, y = observed_variables)) +
+  geom_boxplot(outlier.color="red") +
+  labs(x = "Value",
+       y = "Observed Variables") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(axis.text.y = element_text(angle = 90, vjust = 1, hjust=0.5))
+```
+
+### **Feature Selection Codes for Filtering and Plot Parts (i.e., Server environment)**
+**(RShiny App Lines: 3074 - 3384)**
+
+This section will cover all the codes in the server environment for the Feature Selection Page. To simplify the codes' report, in this example, the inputs for each element in the Feature Selection Page are as follow:
+
+1. Set pv_values as a response variable and the remaining variables as an explanatory variable (i.e., use full dataset) in the main filter (i.e., blue gear icon);
+2. For the Random Forest and Boruta methods, the app will use randomly sampled 10.000 observations from the big dataset (to reduce the expensive running time for the Random Forest and Boruta methods). This is our validation set;
+3. Furthermore, in the Random Forest method, the additional filter (i.e., red gear icon) sets the random forest's parameters of 5 and 10 for mtry and ntree, respectively.
+
+```{r selection-page1, echo=TRUE}
+## Feature Selection
+# (RShiny App Lines: 3074 - 3384)
+
+# Step 1. Randomly sampled 10.000 observations from the big dataset (To reduce the expensive running time for the Random Forest and Boruta methods). This is our validation set.
+
+set.seed(8)
+
+mini_selection_df <- if (nrow(selection_df)  > 10000) {
+  selection_df[sample(nrow(selection_df), 10000), ]
+} else {
+  selection_df
+}
+```
+
+```{r selection-page2, echo=TRUE}
+# Step 2a. variable Importance Method
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable (Use full dataset)
+
+# Fit the model
+
+# Step 2a.1. Set Seed
+set.seed(8)
+
+# Step 2a.2. Fitting the model
+lmMod <- lm(pv_values ~ ., data = selection_df)  # fit lm() model
+
+# Step 2a.3. Print the fitted linear model
+lmMod
+```
+
+```{r selection-page3, echo=TRUE}
+# Step 2a.4.Calculate and print the variable importance
+relImportance <- varImp(lmMod, scale = FALSE)  # calculate variable importance scaled to 100
+
+relImportance %>% arrange(desc(Overall))
+```
+
+```{r selection-page4, echo=TRUE}
+# Step 2a.5. Visualize variable importance
+# Get variable importance from the model fit
+ImpDataRI <- as.data.frame(relImportance) %>% 
+  rename(VImportance = "Overall") %>% 
+  arrange(desc(VImportance))
+ImpDataRI$Var_Names <- row.names(ImpDataRI)
+
+# Plotting
+ggplot(ImpDataRI, aes(x=Var_Names, y=VImportance)) +
+  geom_segment( aes(x=Var_Names, xend=Var_Names, y=0, yend=VImportance), color="skyblue") +
+  geom_point(color="blue", alpha=0.6) +
+  coord_flip() +
+  xlab("Variable") +
+  ylab("variable Importance") +
+  theme(
+    legend.position="bottom",
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank()
+  ) +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r selection-page5, echo=TRUE}
+# Step 2b. Random Forest Method
+# Ref: https://hackernoon.com/random-forest-regression-in-r-code-and-interpretation
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable with the random forest grid of 10 and 50 for mtry and ntree, respectively. (Use randomly sampled 10000 observations from the big dataset)
+
+# Step 2b.1. Set Seed
+set.seed(8)
+
+# Step 2b.2. Fit the random forest model with mtry = 10 and ntree = 50
+rf_fit <- randomForest(pv_values ~ ., data=mini_selection_df, mtry=5, ntree=10,
+                       keep.forest=FALSE, importance=TRUE)
+
+# Step 2b.3. Print the fitted random forest model
+rf_fit
+```
+
+```{r selection-page6, echo=TRUE}
+# Step 2b.4. Print the variable importance
+importance(rf_fit)
+```
+
+```{r selection-page7, echo=TRUE}
+# Step 2b.5. Visualize variable importance
+# Get variable importance from the model fit
+ImpData <- as.data.frame(importance(rf_fit))
+ImpData$Var_Names <- row.names(ImpData)
+
+# Plotting
+ggplot(ImpData, aes(x=Var_Names, y=`%IncMSE`)) +
+  geom_segment( aes(x=Var_Names, xend=Var_Names, y=0, yend=`%IncMSE`), color="skyblue") +
+  geom_point(aes(size = IncNodePurity), color="blue", alpha=0.6) +
+  coord_flip() +
+  xlab("Variable") +
+  theme(
+    legend.position="bottom",
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank()
+  ) +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r selection-page8, echo=TRUE}
+# Step 2c. MARS Method
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable (Use full dataset)
+
+# Step 2c.1. Set Seed
+set.seed(8)
+
+# Step 2c.2. Fitting the model and calculate the variable importance
+marsModel <- earth(pv_values ~ ., data=selection_df) # build model
+
+# Step 2c.3. Print the fitted MARS model
+marsModel
+```
+
+```{r selection-page9, echo=TRUE}
+# Step 2c.4. Estimate the variable importance
+ev <- evimp(marsModel) # estimate variable importance
+ev
+```
+
+```{r selection-page10, echo=TRUE}
+# Step 2c.5. Visualize variable importance
+plot(ev)
+```
+
+```{r selection-page11, echo=TRUE}
+# Step 2d. Boruta Method
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable with the maxRuns argument of 25 (Use randomly sampled 10000 observations from the big dataset)
+
+# Step 2d.1. Set Seed
+set.seed(8)
+
+# Step 2d.2. Fitting the model and calculate the variable importance
+boruta_output <- Boruta(pv_values ~ ., data=mini_selection_df, doTrace=2, maxRuns=25)  # perform Boruta search
+```
+
+```{r selection-page12, echo=TRUE}
+# Step 2d.3. Print the boruta_output
+boruta_output
+```
+
+```{r selection-page13, echo=TRUE} 
+# Step 2d.4. Collect Confirmed variables (i.e., confirmed that it is important by Boruta Algorithm)
+boruta_signif <- names(boruta_output$finalDecision[boruta_output$finalDecision %in% c("Confirmed")])  # collect Confirmed variables
+
+# Print the confirmed variables
+boruta_signif
+```
+
+```{r selection-page14, echo=TRUE}
+# Step 2d.5. Print the estimations of variable importance
+boruta_output[["ImpHistory"]]
+```
+
+```{r selection-page15, echo=TRUE}
+# Step 2d.5. Plotting the variable importance
+plot(boruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")  # plot variable importance
+```
+
+### **Trend Codes for Filtering and Plot Parts (i.e., Server environment)**
+**(RShiny App Lines: 3386 - 3435)**
+
+This section will cover all the codes in the server environment for the Trend Page. To simplify the codes' report, in this example, the inputs for each element in the Trend Page are as follow:
+
+1. Set LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16 in the main filter (i.e., blue gear icon).
+
+```{r trend-page1, echo=TRUE}
+# Trend
+# (RShiny App Lines: 3386 - 3435)
+
+# (In this example, we will be using LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16)
+
+# Step 1. Create trend_df -> the subset of pv dataset after filtered by date and variable
+trend_df <- pv %>% 
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter Date
+  dplyr::select(c(ReadTime, LV_North_Pavilion.MSB_PV_DB)) %>% # filter column
+  na.omit() # remove NAs
+```
+
+```{r trend-page2, echo=TRUE}
+# Step 2. Change the trend_df into time series (ts) object
+
+# Step 2a. Convert ReadTime into datetime data type by using Lubridate package 
+trenddatetime_df <- trend_df
+trenddatetime_df$ReadTime <- dmy_hm(trenddatetime_df$ReadTime) #try dmy_hms
+
+# Step 2b. Convert dataframe to time series
+tseries <- read.zoo(trenddatetime_df)
+
+# Step 2c. Convert to ts object
+tseries_ts <- ts(tseries, frequency = 96)
+```
+
+```{r trend-page3, echo=TRUE}
+# Step 3. Decompose the trend
+decomposed_tseries_ts <- decompose(tseries_ts,type='multiplicative')
+
+# Step 4. Plotting
+plot(decomposed_tseries_ts)
+```
+
+## Bibliography
+
+- Chang, Winston, Cheng, J., Allaire, J.J., Xie, Y., and McPherson, J. (2022, December 15). *Shiny: Web Application Framework for R*. [https://CRAN.R-project.org/package=shiny](https://CRAN.R-project.org/package=shiny)
+- Kassambara. (2017, November 17). *Plot time series data using GGplot*. STHDA.
+[http://www.sthda.com/english/articles/32-r-graphics-essentials/128-plot-time-series-data-using-ggplot/](http://www.sthda.com/english/articles/32-r-graphics-essentials/128-plot-time-series-data-using-ggplot/)
+- Laufer, J. (2019, February 5). *Missing value visualization with tidyverse in R*.
+[https://jenslaufer.com/data/analysis/visualize_missing_values_with_ggplot.html](https://jenslaufer.com/data/analysis/visualize_missing_values_with_ggplot.html)
+- Marriane. (2021, September 30). *9 principles of good web design*. Feeling Peaky.
+[https://www.feelingpeaky.com/9-principles-of-good-web-design/](https://www.feelingpeaky.com/9-principles-of-good-web-design/)
+- Nikola, O. (2021, December 29). *Random Forest Regression in R: Code and Interpretation*. Feeling Peaky. [https://hackernoon.com/random-forest-regression-in-r-code-and-interpretation](https://hackernoon.com/random-forest-regression-in-r-code-and-interpretation)
+- sgr308. (2022, July 22). *how to see second tabitem after clicking action button??* Posit Community. [https://community.rstudio.com/t/how-to-see-second-tabitem-after-clicking-action-button/142783](https://community.rstudio.com/t/how-to-see-second-tabitem-after-clicking-action-button/142783)
+- Tierney, N. (2023, February 2). *Getting started with naniar*. [https://cran.r-project.org/web/packages/naniar/vignettes/getting-started-w-naniar.html](https://cran.r-project.org/web/packages/naniar/vignettes/getting-started-w-naniar.html) 

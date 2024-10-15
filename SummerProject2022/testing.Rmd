@@ -1,0 +1,1137 @@
+---
+title: "SummerProject2022"
+author: "Vincent"
+date: "2022-12-04"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+# Libraries
+library(tidyverse)
+library(naniar)
+library(dplyr)
+library(ggplot2)
+library(e1071) # Calculate skewness
+library(forcats) # Sort the count plot
+```
+
+```{r}
+# summary(pv_data$observed_values)
+
+# Reading data
+pv <- as_tibble(read.csv(("./data/final_PV.csv"))) %>% 
+  rename(observation_no = observation.no)  %>% 
+  separate(TimestampPV, into = c("PVdate", "PVtime"), sep = "\\s", extra = "merge", remove = FALSE) %>% 
+  separate(PVdate, into = c("dayofmonth", "month", "year"), sep = "/", extra = "merge", remove = FALSE) %>% 
+  separate(PVtime, into = c("timefactor", "AMorPM"), sep = "\\s", extra = "merge", remove = FALSE) 
+
+# Preliminary tidying
+# Create PV date and time variables then pivot_longer for the remaining variables (i.e., observed variables)
+pv_data <- pv %>% 
+  pivot_longer(cols = !c("observation_no", "TimestampPV", "PVdate", "dayofmonth", "month", "year", "timefactor", "AMorPM", "PVtime"),
+               names_to = "observed_variables",
+               values_to = "observed_values")
+
+# Convert PVDate into Date class
+pv_data$PVdate <- as.Date(pv_data$PVdate, "%d/%m/%Y")
+
+# Raw data table
+pv_raw <- pv_data %>% 
+  select(c(TimestampPV, observed_variables, observed_values))
+
+# Create small_df for Missing Value plot 5
+small_df <- pv %>% 
+  select(c(dayofmonth, month, year, AMorPM, PVtime))
+```
+
+```{r}
+# Filter date
+pv_data %>% 
+  filter(between(PVdate, as.Date('2021-01-02'), as.Date('2021-01-02')))
+```
+
+```{r}
+# Outlier
+
+# Z-score Approach
+
+# Step 1. Find the below 3*sigma border and above 3*sigma border from the mean
+used_df <- desc_df %>% 
+  filter(observed_variables == "LV_Sport_01.PVDB.DB.B") %>% 
+  na.omit()
+
+right_tailz <- mean(used_df$observed_values) + 3*sd(used_df$observed_values)
+left_tailz <- mean(used_df$observed_values) - 3*sd(used_df$observed_values)
+```
+
+```{r}
+# Step 2. Plot the Distribution plots for the observed variable
+ggplot(data=used_df, aes(x=observed_values, fill=observed_variables)) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_tailz, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_tailz, linetype="dashed", color = "red")
+```
+
+```{r}
+# Step 3. Finding the outlier(s)
+pv_data %>% 
+  filter(observed_variables == "LV_Sport_01.PVDB.DB.B") %>% 
+  filter(observed_values > right_tailz | observed_values < left_tailz) %>% 
+  select(observation_no, TimestampPV, observed_variables, observed_values) %>% 
+  pivot_wider(names_from = observed_variables, values_from = observed_values) 
+```
+
+```{r}
+# Note: Z-score approach can only be used if the distribution of the data is roughly normal.
+
+# https://towardsdatascience.com/univariate-outlier-detection-in-python-40b621295bc5
+# Step 4. Calculate Skewness
+skewness(used_df$observed_values) # Need if statement
+```
+
+```{r}
+# Step 5. Exclude outlier(s)
+used_df %>% 
+  filter(observed_values < right_tailz & observed_values > left_tailz) %>% 
+  ggplot(aes(x=observed_values, fill=observed_variables)) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_tailz, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_tailz, linetype="dashed", color = "red")
+```
+
+```{r}
+used_df %>% 
+  filter(observed_values < right_tailz & observed_values > left_tailz) %>% 
+  ggplot(aes(x=observed_values, fill=observed_variables)) +
+  geom_histogram(adjust=1.5, alpha=.4)
+```
+
+```{r}
+used_df <- pv_data %>% 
+  filter(observed_variables == "Campus_Centre_10.Solar_Main_Supply") %>% 
+  na.omit()
+```
+
+```{r}
+# Boxplot
+box_df <- pv_data %>% 
+  na.omit()
+```
+
+```{r}
+box_df$observed_variables <- "All"
+```
+
+```{r}
+box_df %>% 
+  ggplot(aes(x = observed_variables, y = observed_values)) +
+  geom_boxplot(outlier.color="blue") +
+  coord_flip() +
+  labs(x = "Observed Variables",
+       y = "PV Value") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r}
+# IQR approach
+# Step 1. Find quantile 1, quantile 3, and inter quantile range
+calc_iqr <- IQR(used_df$observed_values)
+q1 <- as.numeric(quantile(used_df$observed_values, probs = 0.25))
+q3 <- as.numeric(quantile(used_df$observed_values, probs = 0.75))
+
+# Step 2. Finding upper and lower limit
+right_taili <- q3 + 1.5 * calc_iqr
+left_taili <- q1 - 1.5 * calc_iqr
+```
+
+```{r}
+used_df %>% 
+      filter(observed_values > right_taili | observed_values < left_taili)
+```
+
+```{r}
+# Step 3. Plot the Distribution plots for the observed variable
+ggplot(data=used_df, aes(x=observed_values, fill=observed_variables)) +
+  geom_density(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_taili, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_taili, linetype="dashed", color = "red")
+```
+
+```{r}
+# Step 4. Finding the outlier(s)
+pv_data %>% 
+  filter(observed_variables == "LV_Sport_01.PVDB.DB.B") %>% 
+  filter(observed_values > right_taili | observed_values < left_taili) %>% 
+  select(TimestampPV, observed_variables, observed_values) %>% 
+  pivot_wider(names_from = observed_variables, values_from = observed_values) 
+```
+
+```{r}
+# Step 5. Excluse outlier(s)
+used_df %>% 
+  filter(observed_values < right_taili & observed_values > left_taili) %>% 
+  ggplot(aes(x=observed_values, fill=observed_variables)) +
+  geom_histogram(adjust=1.5, alpha=.4) +
+  geom_vline(xintercept=right_taili, linetype="dashed", color = "red") +
+  geom_vline(xintercept=left_taili, linetype="dashed", color = "red")
+```
+
+```{r}
+# https://r-charts.com/distribution/histogram-density-ggplot2/
+used_df %>% 
+  filter(observed_values < right_taili & observed_values > left_taili) %>% 
+  ggplot(aes(x=observed_values, fill=observed_variables)) +
+  geom_histogram(adjust=1.5, alpha=.4)
+```
+
+
+```{r}
+# Plot 0
+zero_df <- as_tibble(lapply((pv %>% na.omit()), function(x) sum(x == 0))) %>% 
+  gather(key = "variable_name", value = "missing_count")
+```
+
+
+```{r}
+t_df <- pv_data %>% 
+  filter(observed_values == 0)
+
+t_df %>% 
+  ggplot(aes(x = observed_variables)) +
+  geom_bar() +
+  coord_flip()
+```
+
+```{r}
+t_df %>% 
+  ggplot(aes(x = fct_infreq(PVtime))) +
+  geom_bar() +
+  coord_flip()
+```
+
+```{r}
+x <- pv_data %>% 
+  na.omit()
+```
+
+
+```{r}
+# Distribution starts here!
+test_df <- pv_data %>% # only for square root
+  filter(observed_values >= 0) %>% 
+  na.omit()
+```
+
+```{r}
+# http://fmwww.bc.edu/repec/bocode/t/transint.html#:~:text=In%20data%20analysis%20transformation%20is,of%20a%20distribution%20or%20relationship
+
+# Reducing Skewness
+# (Reduce right skewness)
+# 1. Square root (weaker than cube root and logarithm) -> only positive values
+# 2. Cube root (weaker than logarithm)
+# 3. Logarithm - x to log base 10 of x
+# 4. Logarithm - natural log
+
+# (Reduce left skewness)
+# 1. Square (x^2)
+# 2. Cubic (x^3)
+
+final_df <- pv_data %>% 
+  na.omit() %>%
+  mutate(squareroot_data = sqrt(observed_values),
+         cuberoot_data = observed_values^(1/3),
+         logarithm10 = log10(observed_values),
+         logarithmnat = log(observed_values),
+         square_data = observed_values^2,
+         cubic_data = observed_values^3,
+         observed_values = observed_values^3)
+```
+
+```{r}
+used_df <- pv_data %>% 
+  filter(observed_variables == "LV_Sport_01.PVDB.DB.B") %>% 
+  na.omit()
+```
+
+```{r}
+used_df %>% 
+  ggplot(aes(x=observed_values, fill="purple")) +
+  geom_density(adjust=1.5, alpha=.4) +
+  xlab(as.character("input$O_observed_variables")) +
+  ylab("Density") +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen")) +
+  theme(legend.position = "none")
+```
+
+
+```{r}
+# Descriptive Statistics
+desc_df <- pv_data %>% 
+  select(observed_variables, observed_values)
+```
+
+```{r}
+# Descriptive Statistics output
+desc_df %>% 
+  na.omit() %>% 
+  group_by(observed_variables) %>% 
+  summarise(
+    count = n(),
+    Min = round(min(observed_values), 2),
+    Max = round(max(observed_values), 2),
+    Mean = round(mean(observed_values), 2),
+    SD = round(sd(observed_values), 2),
+    Skewness = round(skewness(observed_values), 2),
+    totalpv = round(sum(observed_values), 2),
+  ) %>% 
+  arrange(count) %>% 
+  rename("n" = count,
+         "Observed Variables" = observed_variables,
+         "Total PV" = totalpv)
+```
+
+
+
+
+```{r}
+# Missing Value starts here!
+
+# Interactive table description of the PV (Missing Value Count)
+missing_df <- as_tibble(lapply(pv, function(x) sum(is.na(x)))) %>% 
+  gather(key = "variable_name", value = "missing_count") %>% 
+  # Calculate the total missing values in the dataset
+  bind_rows(summarise(., 
+                      across(where(is.numeric), sum),
+                      across(where(is.character), ~'Total')))
+```
+
+```{r}
+# Plot 1
+
+# Horizontal version
+missing_df %>% 
+  arrange(missing_count) %>% 
+  mutate(variable_name=factor(variable_name, levels=variable_name)) %>% 
+  ggplot(aes(x=variable_name, y=missing_count)) +
+  geom_segment( aes(x=variable_name, xend=variable_name, y=0, yend=missing_count), color="skyblue") +
+  geom_point( color="blue", size=4, alpha=0.6) +
+  theme_light() +
+  coord_flip()
+```
+
+```{r}
+# Plot 2
+test_df <- as_tibble(lapply(pv, function(x) sum(is.na(x)))) %>% 
+  gather(key = "variable_name", value = "missing") %>% 
+  mutate(not_missing = nrow(pv) - missing) %>% 
+  pivot_longer(cols = !c("variable_name"),
+               names_to = "isna",
+               values_to = "total_count") %>% 
+  mutate(pct = total_count / nrow(pv) * 100)
+```
+
+```{r}
+levels <-
+    (test_df  %>% filter(isna == "missing") %>% arrange(pct))$variable_name
+
+percentage_plot <- test_df %>%
+  ggplot() +
+  geom_bar(aes(x = reorder(variable_name, pct), 
+               y = pct, fill=isna), 
+           stat = 'identity', alpha=0.8) +
+  scale_x_discrete(limits = levels) +
+  scale_fill_manual(name = "", 
+                    values = c('tomato3', 'steelblue'), labels = c("Missing", "Present")) +
+  coord_flip() +
+  labs(title = "Percentage of Missing Values", x = 'Building', y = "% of missing values") +
+  theme(legend.position="bottom",
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+
+percentage_plot
+```
+
+```{r}
+# Plot 3
+test_df <- as_tibble(lapply(pv, function(x) sum(is.na(x)))) %>% 
+  gather(key = "variable_name", value = "missing") %>% 
+  mutate(not_missing = nrow(pv) - missing) %>% 
+  pivot_longer(cols = !c("variable_name"),
+               names_to = "isna",
+               values_to = "total_count") %>% 
+  mutate(pct = total_count / nrow(pv) * 100)
+
+levels <-
+    (test_df  %>% filter(isna == "missing") %>% arrange(pct))$variable_name
+
+row.plot <- pv %>%
+  mutate(id = row_number()) %>%
+  gather(-id, key = "key", value = "val") %>%
+  mutate(isna = is.na(val)) %>%
+  ggplot(aes(x = key, y = id, fill = isna)) +
+  geom_tile() +
+  scale_fill_manual(name = "",
+                    values = c('steelblue', 'tomato3'),
+                    labels = c("Present", "Missing"))  +
+  scale_x_discrete(limits = levels) +
+  labs(x = "Variable",
+       y = "Row Number") +
+  coord_flip()
+
+row.plot
+```
+
+```{r}
+# Plot 4
+gg_miss_upset(pv, nsets = 5,
+              mainbar.y.label = "Number of NAs based on Intersection Size (Group)")
+```
+
+```{r}
+# Plot 5
+gg_miss_fct(x = pv, fct = month) +
+  scale_x_discrete(limits = unique(pv$month))
+```
+
+
+```{r}
+# AI and Optimisation Empowered Net Zero Transition - Monash Campus as A Case Study
+```
+
+```{r}
+# Plot 3
+  output$plot3 <- renderPlot({
+    newdata <- missing_df() %>% 
+      rename(Missing = missing_count) %>% 
+      filter(variable_name != "Total") %>% 
+      mutate(Present = nrow(filtered_df_wider()) - Missing) %>% 
+      pivot_longer(cols = !c("variable_name"),
+                   names_to = "isna",
+                   values_to = "total_count") %>% 
+      mutate(pct = total_count / nrow(filtered_df_wider()) * 100)
+    
+    levels <-
+      (newdata  %>% filter(isna == "Missing") %>% arrange(pct))$variable_name
+    
+    filtered_df_wider() %>%
+      mutate(id = row_number()) %>%
+      gather(-id, key = "key", value = "val") %>%
+      mutate(isna = is.na(val)) %>%
+      ggplot(aes(x = key, y = id, fill = isna)) +
+      geom_tile() +
+      scale_fill_manual(name = "",
+                        values = c('steelblue', 'tomato3'),
+                        labels = c("Present", "Missing"))  +
+      scale_x_discrete(limits = levels) +
+      labs(x = "Variable",
+           y = "Row Number") +
+      coord_flip()
+    
+  })
+```
+
+```{r}
+  output$plot5 <- renderPlotly({
+    filtered_df <- filtered_df()
+    
+    newdata <- filtered_df %>% 
+      pivot_wider(names_from = observed_variables, values_from = observed_values)
+    
+    gg_miss_fct(x = newdata, fct = !!input$MV_observed_variables2)
+  })
+```
+
+```{r}
+x <- c("A", "B")
+y <-c("A")
+```
+
+```{r}
+                     fluidRow(
+                       column(width = 7,
+                              box(strong(h4("Z-Score Approach", style="text-align:center")),
+                                  background = "light-blue", width = 4))
+                       ),
+                     fluidRow(
+                       box(h4(strong("Density"), 
+                              style="text-align:center"),
+                           # Output: Density Plot
+                           plotlyOutput(outputId = "oplot1"),
+                           p(strong("Data source"),": Monashh University"),
+                           width = 6,style="border:1px solid black"),
+                       box(h4(strong("Boxplot"), 
+                              style="text-align:center"),
+                           # Output: Boxplot Plot
+                           plotlyOutput(outputId = "oplot2"),
+                           p(strong("Data source"),": Monashh University"),
+                           width = 6,style="border:1px solid black")
+                       ),
+                     fluidRow(
+                       column(width = 7,
+                              box(strong(h4("IQR Approach", style="text-align:center")),
+                                  background = "light-blue", width = 4))
+                       ),
+                     fluidRow(
+                       box(h4(strong("Density"), 
+                              style="text-align:center"),
+                           # Output: Density Plot
+                           plotlyOutput(outputId = "oplot3"),
+                           p(strong("Data source"),": Monashh University"),
+                           width = 6,style="border:1px solid black"),
+                       box(h4(strong("Boxplot"), 
+                              style="text-align:center"),
+                           # Output: Boxplot Plot
+                           plotlyOutput(outputId = "oplot4"),
+                           p(strong("Data source"),": Monashh University"),
+                           width = 6,style="border:1px solid black")
+                       ),
+                     fluidRow(
+                       column(width = 5),
+                       column(width = 7,
+                              box(strong(h4("Multivariate Analysis", style="text-align:center")),
+                                  background = "light-blue", width = 4))
+                       ),
+```
+
+```{r}
+library(lubridate)
+library(scales)
+library(ggplot2)
+
+set.seed(123)
+
+DF<- data.frame(Datetime = seq(ymd_hms("2011-01-01 00:00:00"), to= ymd_hms("2011-01-10 00:00:00"), by = "hour"),
+                Var1 = runif(217, 5,10))
+ggplot(DF, aes(x = Datetime, y = Var1))+
+  geom_line()
+```
+
+```{r}
+tbl <- tibble::tibble(
+    Date = seq(from = as.Date("2020-01-01"), to = as.Date("2020-01-31"), by = 1),
+    Value = rnorm(31)
+)
+```
+
+```{r}
+tbl_with_days <- tbl %>% 
+    dplyr::mutate(
+        DayOfWeek = lubridate::wday(Date, week_start = 1),
+        DayType = ifelse(DayOfWeek <= 5, "Weekday", "Weekend")
+    )
+```
+
+```{r}
+tbl_with_days %>% 
+    ggplot(aes(Date, Value, group = 1, color = DayType)) + 
+    geom_point() +
+    geom_line()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Step 1. Randomly sampled 10.000 observations from the big dataset (To reduce the expensive running time for the Random Forest and Boruta methods). This is our validation set.
+
+set.seed(8)
+
+mini_selection_df <- if (nrow(selection_df)  > 10000) {
+  selection_df[sample(nrow(selection_df), 10000), ]
+} else {
+  selection_df
+}
+```
+
+```{r}
+# Step 2a. Relative Importance Method
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable (Use full dataset)
+
+# Fit the model
+
+# Step 2a.1. Set Seed
+set.seed(8)
+
+# Step 2a.2. Fitting the model
+lmMod <- lm(pv_values ~ ., data = selection_df)  # fit lm() model
+
+# Step 2a.3. Print the fitted linear model
+lmMod
+```
+
+```{r}
+# Step 2a.4. Calculate and print the relative importance
+relImportance <- calc.relimp(lmMod, type = "lmg", rela = TRUE)  # calculate relative importance scaled to 100
+sort(relImportance$lmg, decreasing=TRUE)  # relative importance
+```
+
+```{r}
+# Step 2a.5. Visualize variable importance
+# Get variable importance from the model fit
+ImpDataRI <- as.data.frame(relImportance$lmg) %>% 
+  rename(RImportance = "relImportance$lmg")
+ImpDataRI$Var_Names <- row.names(ImpDataRI)
+
+# Plotting
+ggplot(ImpDataRI, aes(x=Var_Names, y=RImportance)) +
+  geom_segment( aes(x=Var_Names, xend=Var_Names, y=0, yend=RImportance), color="skyblue") +
+  geom_point(color="blue", alpha=0.6) +
+  coord_flip() +
+  xlab("Variable") +
+  ylab("Relative Importance") +
+  theme(
+    legend.position="bottom",
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank()
+  ) +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r}
+# Step 2b. Random Forest Method
+# Ref: https://hackernoon.com/random-forest-regression-in-r-code-and-interpretation
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable with the random forest grid of 10 and 50 for mtry and ntree, respectively. (Use randomly sampled 10000 observations from the big dataset)
+
+# Step 2b.1. Set Seed
+set.seed(8)
+
+# Step 2b.2. Fit the random forest model with mtry = 10 and ntree = 50
+rf_fit <- randomForest(pv_values ~ ., data=mini_selection_df, mtry=10, ntree=50,
+                       keep.forest=FALSE, importance=TRUE)
+
+# Step 2b.3. Print the fitted random forest model
+rf_fit
+```
+
+```{r}
+# Step 2b.4. Print the variable importance
+importance(rf_fit)
+```
+
+```{r}
+# Step 2b.5. Visualize variable importance
+# Get variable importance from the model fit
+ImpData <- as.data.frame(importance(rf_fit))
+ImpData$Var_Names <- row.names(ImpData)
+
+# Plotting
+ggplot(ImpData, aes(x=Var_Names, y=`%IncMSE`)) +
+  geom_segment( aes(x=Var_Names, xend=Var_Names, y=0, yend=`%IncMSE`), color="skyblue") +
+  geom_point(aes(size = IncNodePurity), color="blue", alpha=0.6) +
+  coord_flip() +
+  xlab("Variable") +
+  theme(
+    legend.position="bottom",
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank()
+  ) +
+  theme(panel.background = element_rect(fill = "linen")) +
+  theme(plot.background = element_rect(fill = "linen"))
+```
+
+```{r}
+# Step 2c. MARS Method
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable (Use full dataset)
+
+# Step 2c.1. Set Seed
+set.seed(8)
+
+# Step 2c.2. Fitting the model and calculate the variable importance
+marsModel <- earth(pv_values ~ ., data=selection_df) # build model
+
+# Step 2c.3. Print the fitted MARS model
+marsModel
+```
+
+```{r}
+# Step 2c.4. Estimate the variable importance
+ev <- evimp(marsModel) # estimate variable importance
+ev
+```
+
+```{r}
+# Step 2c.5. Visualize variable importance
+plot(ev)
+```
+
+```{r}
+# Step 2d. Boruta Method
+
+# In this case, we will use pv_values as a response variable and the remaining variables as an explanatory variable with the maxRuns argument of 25 (Use randomly sampled 10000 observations from the big dataset)
+
+# Step 2d.1. Set Seed
+set.seed(8)
+
+# Step 2d.2. Fitting the model and calculate the variable importance
+boruta_output <- Boruta(pv_values ~ ., data=mini_selection_df, doTrace=2, maxRuns=25)  # perform Boruta search
+```
+
+```{r}
+# Step 2d.3. Print the boruta_output
+boruta_output
+```
+
+```{r}
+# Step 2d.4. Collect Confirmed variables (i.e., confirmed that it is important by Boruta Algorithm)
+boruta_signif <- names(boruta_output$finalDecision[boruta_output$finalDecision %in% c("Confirmed")])  # collect Confirmed variables
+
+# Print the confirmed variables
+boruta_signif
+```
+
+```{r}
+# Step 2d.5. Print the estimations of variable importance
+boruta_output[["ImpHistory"]]
+```
+
+```{r}
+# Step 2d.5. Plotting the variable importance
+plot(boruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")  # plot variable importance
+```
+
+## Trend Codes for Filtering and Plot Parts (i.e., Server environment) (RShiny App Lines: )
+
+> This section will cover all datasets reading and preparation before converting those datasets into interactive datasets in the server environment. Following are the steps of this section: 
+
+- Test 1
+- Test 2
+
+```{r}
+# (In this example, we will be using LV_North_Pavilion.MSB_PV_DB from 2020-07-01 to 2021-07-16)
+
+# Step 1. Create trend_df -> the subset of pv dataset after filtered by date and variable
+trend_df <- pv %>% 
+  filter(between(PVdate, as.Date('2020-07-01'), as.Date('2021-07-16'))) %>% # filter Date
+  dplyr::select(c(TimestampPV, LV_North_Pavilion.MSB_PV_DB)) %>% # filter column
+  na.omit() # remove NAs
+```
+
+```{r}
+# Step 2. Change the trend_df into time series (ts) object
+
+# Step 2a. Convert TimestampPV into datetime data type by using Lubridate package 
+trenddatetime_df <- trend_df
+trenddatetime_df$TimestampPV <- dmy_hm(trenddatetime_df$TimestampPV)
+
+# Step 2b. Convert dataframe to time series
+tseries <- read.zoo(trenddatetime_df)
+
+# Step 2c. Convert to ts object
+tseries_ts <- ts(tseries, frequency = 96)
+```
+
+```{r}
+# Step 3. Decompose the trend
+decomposed_tseries_ts <- decompose(tseries_ts,type='multiplicative')
+
+# Step 4. Plotting
+plot(decomposed_tseries_ts)
+```
+
+
+
+
+
+
+```{r}
+  # Step 1. Randomly sampled 10000 observations from the big dataset 
+  # (To reduce the expensive running time for the Random Forest and Boruta methods)
+  mini_selection_df <- reactive({
+    # Set the random sample seed
+    set.seed(8)
+    
+    mini_selection_df <- if (nrow(selection_df)  > 10000) {
+      selection_df[sample(nrow(selection_df), 10000), ]
+    } else {
+      selection_df
+    }
+    
+    return(mini_selection_df)
+    
+  })
+  
+  # Step 2a. Relative Importance Method
+  
+  # Print the dependent variable in the App
+  # ri_dependent_variable -> first column after TimestampPV is always the dependent variable
+  output$ri_dependent_variable <- renderText({
+    as.character(colnames(selection_df)[1])
+  })
+  
+  # Print the independent variable in the App
+  # ri_independent_variable -> the filtered dependent variables
+  output$ri_independent_variable <- renderText({
+    as.character(paste(input$FS_explanatory_variable,collapse=", "))
+  })
+  
+  # Fit the model
+  lmMod <- reactive({
+    # Step 2a.1. Set Seed
+    set.seed(8)
+    
+    # Step 2a.2. Fitting the model
+    lmMod <- lm(as.formula(paste(colnames(selection_df)[1]," ~ ", paste(input$FS_explanatory_variable,collapse="+"))), data = selection_df)  # fit lm() model
+    
+    return(lmMod)
+  })
+  
+  # Step 2a.3. Print the fitted linear model
+  # ri_model_output -> the output of the fitted linear model
+  output$ri_model_output <- renderPrint({
+    lmMod()
+  })
+  
+  # Step 2a.4. Calculate and print the relative importance
+  
+  # Calculate the relative importance
+  relImportance <- reactive({
+    lmMod = lmMod()
+    
+    # Step 2a.4. Calculate and print the relative importance
+    relImportance <- calc.relimp(lmMod, type = "lmg", rela = TRUE)  # calculate relative importance scaled to 100
+  })
+  
+  # ri_estimation <- the output of the relative importance estimation
+  output$ri_estimation <- renderPrint({
+    relImportance = relImportance()
+    
+    # Sort in descending order
+    sort(relImportance$lmg, decreasing=TRUE)  # relative importance
+  })
+  
+  # Step 2a.5. Visualize variable importance
+  output$fsplot1 <- renderPlotly({
+    relImportance = relImportance()
+    
+    # Get variable importance from the model fit
+    ImpDataRI <- as.data.frame(relImportance$lmg) %>% 
+      rename(RImportance = "relImportance$lmg")
+    ImpDataRI$Var_Names <- row.names(ImpDataRI)
+    
+    # Plotting
+    ggplot(ImpDataRI, aes(x=Var_Names, y=RImportance)) +
+      geom_segment( aes(x=Var_Names, xend=Var_Names, y=0, yend=RImportance), color="skyblue") +
+      geom_point(color="blue", alpha=0.6) +
+      coord_flip() +
+      xlab("Variable") +
+      ylab("Relative Importance") +
+      theme(
+        legend.position="bottom",
+        panel.grid.major.y = element_blank(),
+        panel.border = element_blank(),
+        axis.ticks.y = element_blank()
+      ) +
+      theme(panel.background = element_rect(fill = "linen")) +
+      theme(plot.background = element_rect(fill = "linen"))
+  })
+  
+  
+  
+  # Step 2b. Random Forest Method
+  # Ref: https://hackernoon.com/random-forest-regression-in-r-code-and-interpretation
+  
+  # Print the dependent variable in the App
+  # rffs_dependent_variable -> first column after TimestampPV is always the dependent variable
+  output$rffs_dependent_variable <- renderText({
+    as.character(colnames(mini_selection_df())[1])
+  })
+  
+  # Print the independent variable in the App
+  # rffs_independent_variable -> the filtered dependent variables
+  output$rffs_independent_variable <- renderText({
+    as.character(paste(input$FS_explanatory_variable,collapse=", "))
+  })
+  
+  # Print the selected number of trees grown in the App
+  # rffs_ntree_text -> the selected number of trees grown
+  output$rffs_ntree_text <- renderText({
+    as.character(input$rffs_ntree)
+  })
+  
+  # Print the selected number of predictors sampled for splitting at each node in the App
+  # rffs_mtry_text -> the selected number of predictors sampled for splitting at each node
+  output$rffs_mtry_text <- renderText({
+    as.character(input$rffs_mtry)
+  })
+  
+  # Fit the model
+  rf_fit <- reactive({
+    mini_selection_df = mini_selection_df()
+    
+    # Step 2b.1. Set Seed
+    set.seed(8)
+    
+    # Step 2b.2. Fit the random forest model with mtry = 10 and ntree = 50
+    rf_fit <- randomForest(as.formula(paste(colnames(mini_selection_df)[1]," ~ ", paste(input$FS_explanatory_variable,collapse="+"))), data=mini_selection_df, mtry=as.integer(input$rffs_mtry), ntree=as.integer(input$rffs_ntree),
+                           keep.forest=FALSE, importance=TRUE)
+    
+    return(rf_fit)
+  })
+  
+  # Step 2b.3. Print the fitted random forest model
+  # rffs_model_output -> the output of the fitted random forest model
+  output$rffs_model_output <- renderPrint({
+    rf_fit()
+  })
+  
+  # Step 2b.4. Print the variable importance
+  # rffs_estimation <- the output of the estimated variable importance
+  output$rffs_estimation <- renderPrint({
+    rf_fit = rf_fit()
+    
+    importance(rf_fit)
+  })
+
+  # Step 2b.5. Visualize variable importance
+  output$fsplot2 <- renderPlotly({
+    rf_fit = rf_fit()
+    
+    # Get variable importance from the model fit
+    ImpData <- as.data.frame(importance(rf_fit))
+    ImpData$Var_Names <- row.names(ImpData)
+    
+    # Plotting
+    ggplot(ImpData, aes(x=Var_Names, y=`%IncMSE`)) +
+      geom_segment( aes(x=Var_Names, xend=Var_Names, y=0, yend=`%IncMSE`), color="skyblue") +
+      geom_point(aes(size = IncNodePurity), color="blue", alpha=0.6) +
+      coord_flip() +
+      xlab("Variable") +
+      theme(
+        legend.position="bottom",
+        panel.grid.major.y = element_blank(),
+        panel.border = element_blank(),
+        axis.ticks.y = element_blank()
+      ) +
+      theme(panel.background = element_rect(fill = "linen")) +
+      theme(plot.background = element_rect(fill = "linen"))
+  })
+  
+  
+  
+  # Step 2c. MARS Method
+  
+  # Print the dependent variable in the App
+  # mars_dependent_variable -> first column after TimestampPV is always the dependent variable
+  output$mars_dependent_variable <- renderText({
+    as.character(colnames(selection_df)[1])
+  })
+  
+  # Print the independent variable in the App
+  # mars_independent_variable -> the filtered dependent variables
+  output$mars_independent_variable <- renderText({
+    as.character(paste(input$FS_explanatory_variable,collapse=", "))
+  })
+  
+  # Fit the model
+  marsModel <- reactive({
+    # Step 2c.1. Set Seed
+    set.seed(8)
+    
+    # Step 2c.2. Fitting the model
+    marsModel <- earth(as.formula(paste(colnames(selection_df)[1]," ~ ", paste(input$FS_explanatory_variable,collapse="+"))), data=selection_df) # build model
+    
+    return(marsModel)
+  })
+  
+  # Step 2c.3. Print the fitted MARS model
+  # mars_model_output -> the output of the fitted MARS model
+  output$mars_model_output <- renderPrint({
+    marsModel()
+  })
+  
+  # Step 2c.4. Estimate the variable importance
+  ev <- reactive({
+    marsModel = marsModel()
+    
+    ev <- evimp(marsModel) # estimate variable importance
+    
+    return(ev)
+    
+  })
+  
+  # Print the estimated variable importance by MARS method
+  # mars_estimation <- the output of the estimated variable importance
+  output$mars_estimation <- renderPrint({
+    ev()
+  })
+  
+  # Step 2c.5. Visualize variable importance
+  output$fsplot3 <- renderPlot({
+    ev = ev()
+    
+    plot(ev)
+  })
+  
+  
+  
+  # Step 2d. Boruta Method
+  
+  # Print the dependent variable in the App
+  # bfs_dependent_variable -> first column after TimestampPV is always the dependent variable
+  output$bfs_dependent_variable <- renderText({
+    as.character(colnames(mini_selection_df())[1])
+  })
+  
+  # Print the independent variable in the App
+  # bfs_independent_variable -> the filtered dependent variables
+  output$bfs_independent_variable <- renderText({
+    as.character(paste(input$FS_explanatory_variable,collapse=", "))
+  })
+  
+  # Print the selected number of trees grown in the App
+  # bfs_ntree_text -> the selected number of trees grown
+  output$bfs_ntree_text <- renderText({
+    as.character(input$bfs_ntree)
+  })
+  
+  # Print the selected number of predictors sampled for splitting at each node in the App
+  # bfs_mtry_text -> the selected number of predictors sampled for splitting at each node
+  output$bfs_mtry_text <- renderText({
+    as.character(input$bfs_mtry)
+  })
+  
+  # Fitting the model
+  boruta_output <- reactive({
+    mini_selection_df = mini_selection_df()
+    
+    # Step 2d.1. Set Seed
+    set.seed(8)
+    
+    # Step 2d.2. Fitting the model and calculate the variable importance
+    boruta_output <- Boruta(as.formula(paste(colnames(mini_selection_df)[1]," ~ ", paste(input$FS_explanatory_variable,collapse="+"))), data=mini_selection_df, doTrace=2, maxRuns=25)  # perform Boruta search
+    
+    return(boruta_output)
+  })
+  
+  # Step 2d.3. Print the boruta_output
+  # bfs_model_output -> the output of the fitted Boruta model
+  output$bfs_model_output <- renderPrint({
+    boruta_output()
+  })
+  
+  # Step 2d.4. Print the confirmed variable(s) by Boruta model
+  # bfs_confirmed -> the output of the confirmed variable(s) by Boruta model
+  output$bfs_confirmed <- renderPrint({
+    boruta_output = boruta_output()
+    
+    # Step 2d.4. Collect Confirmed variables (i.e., confirmed that it is important by Boruta Algorithm)
+    boruta_signif <- names(boruta_output$finalDecision[boruta_output$finalDecision %in% c("Confirmed")])  # collect Confirmed variables
+    
+    # Print the confirmed variables
+    return(boruta_signif)
+  })
+  
+  # Step 2d.5. Print the estimations of variable importance
+  # bfs_estimation -> the output of the estimations of variable importance
+  output$bfs_estimation <- renderPrint({
+    boruta_output = boruta_output()
+    
+    # Step 2d.5. Print the estimations of variable importance
+    boruta_output[["ImpHistory"]]
+  })
+  
+  # Step 2d.5. Plotting the variable importance
+  output$fsplot4 <- renderPlot({
+    boruta_output = boruta_output()
+    
+    # Step 2d.5. Plotting the variable importance
+    plot(boruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")  # plot variable importance
+  })
+```
+
+
+
+
+
+
+```{r}
+  # Step 1. Create trend_df -> the subset of pv dataset after filtered by date and variable
+  trend_df <- reactive({
+    newdata <- pv %>% 
+      filter(between(PVdate, input$trend_dates[1], input$trend_dates[2])) %>% # Date
+      dplyr::select(c(TimestampPV, !!input$trend_observed_variables)) %>% # filter column
+      na.omit() # remove NAs
+    
+    return(newdata)
+    
+  })
+  
+  # Step 2. Change the trend_df into time series (ts) object
+  tseries_ts <- reactive({
+    trend_df = trend_df()
+    
+    # Step 2a. Convert TimestampPV into datetime data type by using Lubridate package 
+    trenddatetime_df <- trend_df
+    trenddatetime_df$TimestampPV <- dmy_hm(trenddatetime_df$TimestampPV)
+    
+    # Step 2b. Convert dataframe to time series
+    tseries <- read.zoo(trenddatetime_df)
+    
+    # Step 2c. Convert to ts object
+    tseries_ts <- ts(tseries, frequency = 96)
+    
+    return(tseries_ts)
+    
+  })
+  
+  # Step 3. Decompose the trend
+  decomposed_tseries_ts <- reactive({
+    tseries_ts = tseries_ts()
+    
+    decomposed_tseries_ts <- decompose(tseries_ts,type='multiplicative')
+    
+  })
+  
+  # Step 4. Plotting
+  output$trendplot1 <- renderPlot({
+    decomposed_tseries_ts = decomposed_tseries_ts()
+    
+    plot(decomposed_tseries_ts)
+  })
+```
+
+
+
+```{r}
+pv <- as_tibble(read.csv(("./data/time_series_df.csv")))
+selection_df <- as_tibble(read.csv(("./data/selection_df.csv")))
+```
+
+```{r}
+x <- pv %>% head(20000)
+y <- selection_df %>% head(200000)
+```
+
+```{r}
+write.csv(x, "C:\\Users\\Vince\\Documents\\Master of Data Science or IT (S2)\\time_series_df.csv", row.names=FALSE)
+```
+
+```{r}
+write.csv(y, "C:\\Users\\Vince\\Documents\\Master of Data Science or IT (S2)\\selection_df.csv", row.names=FALSE)
+```
+
